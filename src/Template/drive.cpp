@@ -340,9 +340,6 @@ void Drive::drive_distance(float distance, float heading, bool motion_chaining, 
     float right_voltage = drive_output-heading_output + extra_drive_voltage;
     drive_with_voltage(left_voltage, right_voltage);
 
-    // TEMP DEBUG -- remove once the slow/no-turn issue is diagnosed.
-    printf("heading: %.1f, heading_err: %.1f, drive_out: %.1f, heading_out: %.1f, L: %.1f, R: %.1f\n",
-           get_absolute_heading(), heading_error, drive_output, heading_output, left_voltage, right_voltage);
 
     delay(10);
   }
@@ -716,10 +713,12 @@ void Drive::turn_to_point(float X_position, float Y_position, float extra_angle_
 
 
 
-// Cascade never allowed to extend past this (motor degrees, measured from the
-// tare_position() at the start of control_arcade() below). Small placeholder
-// -- tune once the real extend limit has been tested.
-const int CASCADE_EXTEND_LIMIT_DEG = 3900;
+// The cascade extend limit (CASCADE_EXTEND_LIMIT_DEG) and the "arrived"
+// tolerance (CASCADE_SETTLE_ERROR_DEG) now live in Template/cascade.h, so the
+// buttons below and the cascade controller share one copy of each number
+// instead of drifting apart.
+// 中文：cascade 的行程上限與「到位」容差搬到 Template/cascade.h，讓下面的按鍵跟
+// cascade 控制器共用同一份數字，不會兩邊各改各的。
 
 // RIGHT/LEFT button cascade targets (paired with the arm going to POS_1/POS_2
 // respectively). Change these values to retarget.
@@ -727,11 +726,8 @@ int CASCADE_PRESET_DEG = 545;       // RIGHT -> ArmPosition::POS_1, first cascad
 int CASCADE_PRESET_2_DEG = 595;     // LEFT  -> ArmPosition::POS_3, first cascade move
 int CASCADE_RIGHT_FINAL_DEG = 250;  // RIGHT -> cascade's 2nd move, once the arm settles
 int CASCADE_LEFT_FINAL_DEG = 0;     // LEFT  -> cascade's 2nd move, once the arm reaches POS_3
-const int CASCADE_MOVE_VELOCITY = 117; // move_absolute() speed, out of 200 rpm
 
-// Waiting on cascade/arm move_absolute() inside a preset sequence: max error to
-// count as "arrived", and how long to wait before giving up and moving on.
-const int CASCADE_SETTLE_ERROR_DEG = 20;
+// How long a preset sequence waits on one step before giving up and moving on.
 const int PRESET_STEP_TIMEOUT_MS = 3000;
 // arm_settled is recomputed by arm_task() every 10ms, so it stays stale (true
 // for the *previous* target) briefly after arm_set_position() -- wait this long
@@ -756,21 +752,61 @@ static bool preset_still_owns(int seq_id){
   return cascade_preset_active && seq_id == preset_sequence_id;
 }
 
+// Give up on the whole preset sequence and hand the cascade back to the driver.
+// The buzz on the controller is the only way the driver finds out -- without it
+// the robot just quietly stops halfway through and looks broken.
+// 中文：整串預設動作放棄，把 cascade 還給駕駛。遙控器震一下是駕駛唯一會知道的方式
+// ——不震的話，機器人只是安靜地停在半路，看起來像壞掉。
+static void preset_abort(){
+  cascade_preset_active = false;
+  // Park the cascade where it actually is. We just proved it cannot reach the
+  // target it was given, so leaving that target in place would have the PID
+  // leaning on it forever -- and once kP is tuned up, "leaning forever" means a
+  // stalled motor pulling stall current until something gives.
+  // 中文：把目標設回它現在的位置。剛剛已經證明它到不了原本的目標，還留著那個目標的話
+  // PID 會一直死推——kP 調高之後，「一直死推」就是馬達堵轉、電流一路吃到燒東西。
+  cascade_set_target(cascade_get_position_deg());
+  // Drive::master is private and this is a free function, so buzz the master
+  // controller through the plain C API -- same controller, no class changes.
+  // 中文：Drive 裡的 master 是 private、這裡又是自由函式，所以改用 C 版 API 讓同一
+  // 支遙控器震動，不用去動類別。
+  pros::c::controller_rumble(pros::E_CONTROLLER_MASTER, "-");
+}
+
 // Wait for the cascade to reach target_deg. Returns false if the sequence was
-// cancelled, so the caller can stop early.
+// cancelled OR if the cascade did not get there in time, so the caller stops.
+//
+// Timing out is NOT "close enough, carry on". The next step of the LEFT
+// sequence lowers the arm to POS_2, which is only safe once the cascade is
+// actually retracted -- running it against a cascade stuck halfway is how the
+// arm and the cascade hit each other. So a timeout aborts the sequence and
+// buzzes the controller instead of pressing on.
+// 中文：等 cascade 到 target_deg。被取消或「等不到」都回 false，呼叫端就會停手。
+// 逾時不等於「差不多了、繼續吧」：LEFT 序列的下一步是把手臂放到 POS_2，那一步只有
+// 在 cascade 真的收回來之後才安全，對著卡在半路的 cascade 放手臂就是兩個機構互撞。
+// 所以逾時＝中止整串動作＋遙控器震一下，不硬做下去。
 static bool cascade_wait_settled(int seq_id, int target_deg){
   int waited_ms = 0;
-  while(fabs(cascade1.get_position() - target_deg) > CASCADE_SETTLE_ERROR_DEG){
+  while(fabs(cascade_get_position_deg() - target_deg) > CASCADE_SETTLE_ERROR_DEG){
     if(!preset_still_owns(seq_id)) return false;
     delay(10);
     waited_ms += 10;
-    if(waited_ms > PRESET_STEP_TIMEOUT_MS) break;
+    if(waited_ms > PRESET_STEP_TIMEOUT_MS){
+      preset_abort();
+      return false;
+    }
   }
   return preset_still_owns(seq_id);
 }
 
 // Wait for the arm to reach whatever target was last set with
-// arm_set_position(). Same cancellation contract as cascade_wait_settled().
+// arm_set_position(). Same contract as cascade_wait_settled(), timeout included:
+// in the LEFT sequence the step after this one retracts the cascade to 0, and
+// doing that while the arm is stuck halfway up is the same two mechanisms
+// hitting each other from the other direction. So a timeout aborts too.
+// 中文：等手臂到位，規則跟 cascade_wait_settled() 一樣，逾時也一樣。LEFT 序列的下一步
+// 是把 cascade 收回 0，手臂卡在半路時做那一步，就是同樣兩個機構從另一邊互撞——所以
+// 等不到手臂也要中止。
 static bool arm_wait_settled(int seq_id){
   delay(ARM_SETTLE_LATENCY_MS);
   int waited_ms = 0;
@@ -778,7 +814,10 @@ static bool arm_wait_settled(int seq_id){
     if(!preset_still_owns(seq_id)) return false;
     delay(10);
     waited_ms += 10;
-    if(waited_ms > PRESET_STEP_TIMEOUT_MS) break;
+    if(waited_ms > PRESET_STEP_TIMEOUT_MS){
+      preset_abort();
+      return false;
+    }
   }
   return preset_still_owns(seq_id);
 }
@@ -806,9 +845,35 @@ void Drive::control_arcade(){
   // Task in_fxn(intake_status);
   chassis.drive_stop(MotorBrake::coast);
 
+  // Practice-mode odometry. set_coordinates() is the ONLY place Drive spawns
+  // its odom task (see set_coordinates() above: suspend+delete+recreate, so
+  // re-calling it is safe), and outside a match nothing ever calls it -- driver
+  // control entered without field control means autonomous() never ran, so
+  // pose_x / pose_y and the Field panel's marker would sit at 0 forever. Same
+  // fix tune_opcontrol() ships. Guarded on odom_task: in a real match auton
+  // already called set_coordinates() with the true starting pose, and the
+  // auton -> driver hand-over must keep that pose, not re-zero it.
+  // 中文：純練習（不接場控直接進遙控）時 autonomous() 沒跑過，而 set_coordinates()
+  // 是 Drive 唯一會生出 odom task 的地方（見上方：suspend+delete+重建，重複呼叫安全）
+  // ——沒人呼叫它，pose 與場地面板的圖示就永遠停在 0。這裡比照 tune_opcontrol() 歸零
+  // 啟動。用 odom_task 當條件是為了正式比賽：auton 已建立座標系並累積了位置，交棒到
+  // 遙控時 pose 要延續，不能被歸零。
+  if(chassis.odom_task == nullptr){
+    chassis.set_coordinates(0, 0, 0);
+  }
+
   // Cascade starts at position 0 and is never allowed to go below it.
   cascade1.tare_position();
   cascade2.tare_position();
+  cascade_notify_tare();
+
+  // Hand the cascade over to its PID controller for driver control. It holds
+  // position 0 (right here, where we just tared) until a button says otherwise.
+  // Autonomous turns this back off so its move_absolute() moves still work.
+  // 中文：把 cascade 交給它的 PID 控制器（遙控期間才開）。它會先撐在剛剛歸零的
+  // 位置 0，直到有按鍵叫它去別的地方。自走會把它關掉，所以自走照舊。
+  cascade_set_target(0);
+  cascade_control_set_enabled(true);
 
   while(1){
   throttle = master.get_analog(ANALOG_LEFT_Y);
@@ -893,7 +958,36 @@ void Drive::control_arcade(){
     if(cascade_limit.get_value() == 1){
       cascade1.tare_position();
       cascade2.tare_position();
+      // The controller's target is in the same (just re-zeroed) frame, so
+      // nothing needs re-aiming -- only the PID's memory of the previous error
+      // has to be cleared, or the position jump reads as a fake spike.
+      // 中文：控制器的目標跟編碼器是同一套座標，歸零後不用重設目標；只要把 PID
+      // 對「上一次誤差」的記憶清掉，位置突跳才不會被當成真的誤差。
+      cascade_notify_tare();
     }
+
+    // --- intake (R1/R2) and cascade (L1/L2): TWO INDEPENDENT if-chains ---
+    // They used to share ONE else-if chain with the intake first, which made the
+    // two mechanisms lock each other out:
+    //   * Holding L1 (cascade up) and then tapping R1 took the intake branch and
+    //     skipped the cascade branch entirely. cascade_jog_on stayed true with
+    //     the last jog voltage, so the lift carried on rising -- and the travel
+    //     limit checked here was no longer being evaluated at all.
+    //   * The L1/L2 branches never ran intake.move(0), so an intake spun up with
+    //     R1 kept turning at 127 after the driver let go and pressed L1.
+    //   * cascade_jog_stop() lived in the shared else branch, which R1/R2 stole,
+    //     so once the intake grabbed the chain the jog was never handed back.
+    // Split into two chains, each mechanism is now evaluated every single loop.
+    // 中文：intake（R1/R2）與 cascade（L1/L2）改成兩條各自獨立的 if 鏈。以前兩者共用
+    // 同一條 else-if、而且 intake 排在前面，結果兩個機構互相卡死：
+    //   * 壓著 L1（升 cascade）再按 R1，會走進 intake 那支、整個跳過 cascade 那段。
+    //     cascade_jog_on 維持 true、電壓維持上一次的值，升降繼續往上開，而且這裡的
+    //     行程上限根本沒有被執行到。
+    //   * L1/L2 那兩支從來不會呼叫 intake.move(0)，所以 R1 轉起來的 intake，放開 R1
+    //     改壓 L1 之後還在 127 空轉。
+    //   * cascade_jog_stop() 只寫在共用的 else 裡，而那個 else 被 R1/R2 搶走，所以
+    //     intake 一接手，點動狀態就再也交還不回去。
+    // 拆成兩條鏈之後，兩個機構每一圈都會各自被判斷一次。
 
     //intake
     if(master.get_digital(DIGITAL_R1)){
@@ -902,50 +996,67 @@ void Drive::control_arcade(){
     else if(master.get_digital(DIGITAL_R2)){
       intake.move(-127);
     }
-    else if (master.get_digital(DIGITAL_L1)){
+    else{
+      intake.move(0);
+    }
+
+    //cascade
+    if(master.get_digital(DIGITAL_L1)){
+      // L1 = jog up, unchanged: same button, same voltage, same limit check.
+      // cascade_jog() just routes it through the controller (which stands
+      // aside while jogging) instead of writing to the motors here. The limit is
+      // ALSO enforced inside cascade_task(), so a jog cannot run past it even if
+      // this loop is starved of CPU time.
+      // 中文：L1＝往上點動，行為沒變（同一顆按鍵、同樣的電壓、同樣的上限判斷）。
+      // 只是改成走 cascade_jog()，點動期間控制器會讓位，不是在這裡直接寫馬達。
+      // 上限在 cascade_task() 裡「也」會再夾一次，就算這個迴圈搶不到 CPU，點動也
+      // 不會衝過上限。
       cascade_preset_active = false;
       if(cascade1.get_position() >= CASCADE_EXTEND_LIMIT_DEG || cascade2.get_position() >= CASCADE_EXTEND_LIMIT_DEG){
-        cascade1.move(0);
-        cascade2.move(0);
+        cascade_jog(0);
       }
       else{
-        cascade1.move(100);
-        cascade2.move(100);
+        cascade_jog(100);
       }
     }
     else if(master.get_digital(DIGITAL_L2)){
+      // L2 = jog down, unchanged in the same way as L1 above.
+      // 中文：L2＝往下點動，同上，行為沒變。
       cascade_preset_active = false;
       if(cascade1.get_position() <= 0 || cascade2.get_position() <= 0){
-        cascade1.move(0);
-        cascade2.move(0);
+        cascade_jog(0);
       }
       else{
-        cascade1.move(-97);
-        cascade2.move(-97);
+        cascade_jog(-97);
       }
     }
     else{
-      intake.move(0);
-      if(!cascade_preset_active){
-        cascade1.move(0);
-        cascade2.move(0);
-      }
+      // Nobody is jogging: hand the cascade back to the PID. If a preset
+      // sequence is running it holds that sequence's target; otherwise it holds
+      // wherever the driver let go of L1/L2 -- which is the one thing that IS
+      // new here. It used to be sent 0 and sag down under its own weight.
+      // 中文：沒人在點動，就把 cascade 交還給 PID。有預設動作在跑就撐在那個目標，
+      // 否則就停在駕駛放開 L1/L2 的那一格——這是唯一真正變新的地方：以前放開後是
+      // 送 0，機構會自己往下沉。
+      cascade_jog_stop();
     }
 
     bt_Right = master.get_digital(DIGITAL_RIGHT);
     if(bt_Right and !last_bt_Right){
       cascade_preset_active = true;
       int right_seq_id = ++preset_sequence_id;
-      cascade1.move_absolute(CASCADE_PRESET_DEG, CASCADE_MOVE_VELOCITY);
-      cascade2.move_absolute(CASCADE_PRESET_DEG, CASCADE_MOVE_VELOCITY);
+      // Same target height as before -- it is now handed to the cascade PID
+      // instead of the motors' built-in move_absolute().
+      // 中文：目標高度沿用原本的數字，只是改成交給 cascade 的 PID，不再用馬達內建
+      // 的 move_absolute()。
+      cascade_set_target(CASCADE_PRESET_DEG);
       arm_set_position(ArmPosition::POS_1);
       claw.set_value(false);
       // Runs on its own task so waiting for the arm doesn't block the rest
       // of control_arcade() (drive, intake, other buttons).
       pros::Task([right_seq_id]{
         if(!arm_wait_settled(right_seq_id)) return;
-        cascade1.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
-        cascade2.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
+        cascade_set_target(CASCADE_RIGHT_FINAL_DEG);
       });
     }
     last_bt_Right = bt_Right;
@@ -964,8 +1075,7 @@ void Drive::control_arcade(){
     if(bt_Left and !last_bt_Left){
       cascade_preset_active = true;
       int left_seq_id = ++preset_sequence_id;
-      cascade1.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
-      cascade2.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
+      cascade_set_target(CASCADE_PRESET_2_DEG);
       // Run on its own task so the waits between steps don't block the rest
       // of control_arcade() (drive, intake, other buttons). Each wait bails
       // out if the driver takes the cascade back over with L1/L2, or presses
@@ -979,13 +1089,12 @@ void Drive::control_arcade(){
         if(!arm_wait_settled(left_seq_id)) return;
 
         // 3. retract the cascade all the way back to CASCADE_LEFT_FINAL_DEG.
-        cascade1.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
-        cascade2.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
+        cascade_set_target(CASCADE_LEFT_FINAL_DEG);
         if(!cascade_wait_settled(left_seq_id, CASCADE_LEFT_FINAL_DEG)) return;
 
-        // 4. rotate the arm down to POS_2, cascade holds where it is --
-        //    move_absolute() keeps it there, and cascade_preset_active stays
-        //    true so the main loop won't zero its voltage.
+        // 4. rotate the arm down to POS_2, cascade holds where it is -- the
+        //    cascade PID keeps holding that target for as long as nobody sets
+        //    a new one or grabs L1/L2.
         arm_set_position(ArmPosition::POS_2);
       });
     }

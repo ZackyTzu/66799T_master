@@ -38,6 +38,16 @@
 
 namespace vexdash {
 
+// Yield hook for declare_all()'s burst throttle (see declare_all() doc
+// below for the WHY). Default nullptr = no throttling, i.e. the exact old
+// behaviour -- fully backward compatible and host-testable, matching the
+// PumpConfig callback pattern (RegisterCallback/SampleCallback) elsewhere in
+// this lib.
+// 中文：declare_all() burst 節流用的讓步鉤子（原因見 declare_all() 註解）。
+// 預設 nullptr＝不節流，即完全維持舊行為——與 PumpConfig 的
+// RegisterCallback/SampleCallback 同款設計，向下相容、host 可測。
+using YieldCallback = void (*)(void* user_data);
+
 // 指標所指的 C 型別（決定怎麼讀寫指標；wire 上的 ValueType 由此推導）。
 enum class WatchScalar : std::uint8_t {
   kF64,   // double*   -> wire kF64
@@ -49,7 +59,9 @@ enum class WatchScalar : std::uint8_t {
 class WatchRegistry {
  public:
   // 固定容量（無 heap）。比照 lib-core 的 kMaxChannels / kMaxConfigParams。
-  static constexpr std::size_t kMaxWatches = 64;
+  // RAISED 64 -> 96 (2026-07-31, ported from 66994V), in step with kMaxChannels
+  // and kMaxConfigParams. 中文：上限 64 → 96，與那兩個常數同步。
+  static constexpr std::size_t kMaxWatches = 96;
 
   WatchRegistry() = default;
 
@@ -57,19 +69,28 @@ class WatchRegistry {
   // 回傳 true＝已登記/已覆蓋；false＝表滿、名字無效、或 ptr 為 nullptr（null 指標
   // 在入口直接拒絕，不會進表——與 sample_all/declare_all 的防護一致）。同名同類
   // 後者覆蓋前者（更新指標與屬性；覆蓋後既有的 id 快取會在下次 declare_all()
-  // 重新對齊）。表滿（kMaxWatches=64）時登記靜默失敗（回 false），門面的
+  // 重新對齊）。表滿（kMaxWatches，目前 96）時登記靜默失敗（回 false），門面的
   // watch()/watch_config() 不回傳值，超額項會被靜默忽略——上限與行為見
   // docs/quick-start.zh-TW.md 的「常見雷」。
-  bool add(const char* name, double* ptr, const char* unit = "", int device_port = -1);
-  bool add(const char* name, float* ptr, const char* unit = "", int device_port = -1);
-  bool add(const char* name, std::int32_t* ptr, const char* unit = "", int device_port = -1);
-  bool add(const char* name, bool* ptr, const char* unit = "", int device_port = -1);
+  //
+  // `path`（protocol.md §5.3 v1.4）＝這條頻道屬於哪個機構／群組（如 "drive/pid"），
+  // 與 add_config 的 `group` 同一個命名空間：同一個字串 = dashboard 上同一個焦點分組，
+  // 該機構的圖表與可調參數會並排在一起。預設 ""＝不宣告，wire 上一個 byte 都不多、
+  // dashboard 退回名字啟發式猜分組（＝加這個參數之前的行為，既有呼叫端零改動）。
+  bool add(const char* name, double* ptr, const char* unit = "", int device_port = -1,
+           const char* path = "");
+  bool add(const char* name, float* ptr, const char* unit = "", int device_port = -1,
+           const char* path = "");
+  bool add(const char* name, std::int32_t* ptr, const char* unit = "", int device_port = -1,
+           const char* path = "");
+  bool add(const char* name, bool* ptr, const char* unit = "", int device_port = -1,
+           const char* path = "");
 
   // ---- 登記：telemetry（取樣函式式，供 watch_motor 等物件助手用）----------
   // sampler(obj) 每次回傳一個 double 樣本（wire 型別固定 kF64）。obj 是傳給
-  // sampler 的 context（例如 pros::Motor*）。
+  // sampler 的 context（例如 pros::Motor*）。`path` 意義同上。
   bool add_fn(const char* name, double (*sampler)(void* obj), void* obj, const char* unit = "",
-              int device_port = -1);
+              int device_port = -1, const char* path = "");
 
   // ---- 登記：config（可調雙向，指標式）-----------------------------------
   // group 是 dashboard 上的 UI 群組路徑（protocol.md §5.6），"" = 根。
@@ -81,7 +102,27 @@ class WatchRegistry {
   // 走訪登記表逐一 declare_*（telemetry -> declare_channel_ex，config ->
   // declare_f64/i32/bool + set_callback）。天生 idempotent：可安全在啟動、每次
   // 重連、每次週期自癒重送時重複呼叫（正是 pump 的 on_register 契約要的）。
-  void declare_all(Session& session);
+  //
+  // Burst throttle (second layer of defense alongside the transport-level
+  // bounded_retry_write, see bounded_write.h): a robot with many watch()
+  // calls emits one CHANNEL_DEF/CONFIG_SCHEMA frame per entry, ALL in this
+  // one synchronous loop -- up to kMaxWatches (96) frames back-to-back with no
+  // gap at all. That is exactly the ~1.5KB link-up registration burst that
+  // overwhelms the Smart Port TX FIFO faster than it drains. When `yield` is
+  // non-null, this loop calls it every `yield_every` declared frames (a
+  // scheduler tick / pros::delay(1) on PROS) so the FIFO gets a chance to
+  // drain mid-burst instead of piling the whole registry's frames up at
+  // once. Default nullptr/yield_every -> unchanged behaviour (no throttling,
+  // existing tests and callers are unaffected).
+  // 中文：burst 節流（跟 transport 層的 bounded_retry_write 是雙層保險，見
+  // bounded_write.h）：watch() 項目多的機器人一次 declare_all() 會在同一個同步
+  // 迴圈裡連續送出最多 kMaxWatches（目前 96）個 CHANNEL_DEF/CONFIG_SCHEMA 幀、中間完
+  // 全沒有間隔——這正是塞爆 Smart Port TX FIFO 的 ~1.5KB link-up 註冊 burst 本
+  // 尊。`yield` 非 null 時，每宣告 `yield_every` 幀就呼叫一次（PROS 上接
+  // pros::delay(1)），讓 FIFO 在 burst 中途有機會排空。預設 nullptr／
+  // yield_every 不節流＝完全維持舊行為，既有測試與呼叫端零影響。
+  void declare_all(Session& session, YieldCallback yield = nullptr, void* yield_user_data = nullptr,
+                    std::size_t yield_every = 5);
 
   // flush 前取樣：把每個 telemetry 登記項的目前值讀出並 put() 進 telemetry。
   // 尚未 declare_all()（或 declare 失敗）的項目其 channel id 無效，會被跳過。
@@ -97,6 +138,11 @@ class WatchRegistry {
     char name[kMaxNameLen + 1] = {0};
     // config: UI 群組路徑；telemetry: 單位字串。兩者互斥（依 kind），共用一個緩衝。
     char group_or_unit[kMaxNameLen + 1] = {0};
+    // telemetry 專用：CHANNEL_DEF 的 path（protocol.md §5.3 v1.4），""＝不宣告。
+    // config 項目不用這格（它的群組本來就在 group_or_unit）——不共用緩衝是因為
+    // telemetry 需要「單位」與「群組」兩個都存得下。固定長度、無動態配置；成本
+    // ＝kMaxWatches（目前 96）× 64 bytes ≒ 6KB 靜態儲存，與 name 那格同級。
+    char path[kMaxPathLen + 1] = {0};
     Kind kind = Kind::kTelemetry;
     WatchScalar scalar = WatchScalar::kF64;
     bool is_fn = false;                        // telemetry, sampler-function form. 中文：telemetry 取樣函式式

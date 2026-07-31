@@ -1,31 +1,47 @@
 #include "main.h"
 
 IMU inertial(17);
-Rotation fwd_tracker(2); // I just put a random number here but we dont have a forward tracker
-Rotation sideways_tracker(1);  // I just put a random number here but we dont have a sideways tracker
+// PLACEHOLDER TRACKERS -- the robot has neither of them. Their port numbers are
+// made up and they DO collide with real devices (port 2 = distance_sensorL,
+// port 1 = rightMiddle). That is known and harmless: the drive is configured as
+// DriveStyle::ZERO_TRACKER below, so Drive never reads either object, and a
+// Rotation constructor does not reconfigure a port that already holds a motor or
+// a distance sensor -- it just never returns valid data, which nobody asks for.
+// They are also deliberately left out of the vexdash device map in main.cpp.
+// Do NOT "fix" the ports to free numbers: give them real unused ports and the
+// next person will believe the robot has trackers. Delete them instead, if ever.
+// 中文：這兩顆是假的 tracker，車上根本沒有。埠號是隨手填的，而且真的跟現有裝置撞到
+// （埠 2＝distance_sensorL、埠 1＝rightMiddle）。這是已知且無害的：底盤下面設定成
+// DriveStyle::ZERO_TRACKER，Drive 從頭到尾不會讀這兩個物件；而 Rotation 的建構也不
+// 會把已經插著馬達／距離感測器的埠改掉，它只是永遠讀不到有效值——反正沒人讀。
+// main.cpp 的 vexdash 孔位圖也故意不宣告它們。
+// 不要把埠號「修」成沒人用的號碼：改成合法空埠，下一個人就會以為車上真的有 tracker。
+// 真要處理就是整個刪掉。
+Rotation fwd_tracker(2);       // fake: no forward tracker on this robot 中文：假的，沒有前向 tracker
+Rotation sideways_tracker(1);  // fake: no sideways tracker on this robot 中文：假的，沒有側向 tracker
 
 // 66799T Worlds
 // negative port number means reversed (there is no separate "reversed" constructor argument)
-Motor leftFront(-3, MotorGears::blue);
-Motor leftMiddle(16, MotorGears::blue);
-Motor leftBack(6, MotorGears::green);
+Motor leftFront(-4, MotorGears::blue);
+Motor leftMiddle(6, MotorGears::blue);
+Motor leftBack(16, MotorGears::green);
 Motor rightFront(15, MotorGears::blue);
-Motor rightMiddle(-8, MotorGears::blue);
-Motor rightBack(-1, MotorGears::green);
+Motor rightMiddle(-1, MotorGears::blue);
+Motor rightBack(-8, MotorGears::green);
 
 MotorGroup leftMotors({leftFront.get_port(), leftMiddle.get_port(), leftBack.get_port()});
 MotorGroup rightMotors({rightFront.get_port(), rightMiddle.get_port(), rightBack.get_port()});
 
 Motor intake(-5, MotorGears::green);
 Motor cascade1(7, MotorGears::green);
-Motor cascade2(-2, MotorGears::green);
+Motor cascade2(-3, MotorGears::green);
 Motor arm(18, MotorGears::green);
 
-adi::DigitalOut claw('G');
-adi::DigitalOut toggle('F');
+adi::DigitalOut claw('A');
+adi::DigitalOut toggle('C');
 adi::DigitalIn cascade_limit('D');
 
-Distance distance_sensorL(4);
+Distance distance_sensorL(2);
 Distance distance_sensorR(20);
 Rotation arm_rotation(21);
 
@@ -54,7 +70,20 @@ Drive chassis(
     // External ratio, must be in decimal, in the format of input teeth/output teeth.
     // If your motor has an 84-tooth gear and your wheel has a 60-tooth gear, this value will be 1.4.
     // If the motor drives the wheel directly, this value is 1:
-    48/36, // Changing this from 48/36 to 36/48 is wrong! 36/48 makes odom (x and y values) increment way too slowly. TODO: Figure out why this is.
+    // 48/36 is INTEGER division: both are ints, so this argument is literally 1
+    // -- not 1.333. That is not a bug to fix, it is the number every autonomous
+    // distance on this robot was tuned against. (And it explains the old TODO:
+    // 36/48 is integer division too and evaluates to 0, which zeroes the odom
+    // update entirely -- x/y stop moving, not "increment too slowly".) Writing
+    // 48.0/36.0 would change the ratio to 1.333 and every auton drive_distance()
+    // would overshoot by a third, so leave it alone unless you are prepared to
+    // re-tune the whole auton.
+    // 中文：48/36 是「整數除法」，兩邊都是 int，所以這個參數實際上就是 1，不是
+    // 1.333。這不是待修的 bug，是全部自走距離都照著它調出來的既有值。（順帶解答舊
+    // 的 TODO：36/48 同樣是整數除法、結果是 0，odom 會完全不動，不是「跑太慢」。）
+    // 寫成 48.0/36.0 會讓比值變成 1.333，每一段自走 drive_distance() 都會多跑三分
+    // 之一——除非你準備把整套自走重調，否則不要動它。
+    48/36,
 
     // Gyro scale, this is what your gyro reads when you spin the robot 360 degrees.
     // For most cases 360 will do fine here, but this scale factor can be very helpful when precision is necessary.
@@ -86,8 +115,28 @@ Drive chassis(
 
 void default_constants(){
     // Each constant set is in the form of (maxVoltage, kP, kI, kD, startI(, minVoltage)).
-    chassis.set_drive_constants(127, 7, 0, 12.5, 0, 0);
-    chassis.set_heading_constants(64, 1.5, 0, 8, 0); //chassis.set_heading_constants(64, 0.4, 0, 20, 0);      chassis.set_heading_constants(64, 1, 0, 2, 0);
+    //
+    // startI is the anti-windup gate: PID.cpp only accumulates the integral once
+    // |error| < startI, so it works on the last stretch into the target instead
+    // of winding up over the whole approach. A startI of 0 does NOT mean "no
+    // limit" -- it means |error| < 0, which is never true, so the I term is
+    // permanently dead however far the kI slider is dragged. Drive and heading
+    // both shipped with 0, which is why drive_kI did nothing on the dashboard.
+    // The values below are a couple of times each loop's settle window (drive
+    // settles at 1.875 in, so 2 in; heading is in degrees, so 3 deg), which is
+    // the band to stay in if these are ever re-tuned.
+    // Changing startI alone changes NO behaviour while kI is 0 (0 * anything is
+    // still 0) -- it only makes the kI slider able to do something.
+    // 中文：startI 是積分的防飽和閘：PID.cpp 只有在 |誤差| < startI 時才累積積分，讓
+    // I 項只在「最後一段」作用，不會在整段接近過程中累到爆。填 0 不是「不設限」，而是
+    // 「|誤差| < 0」＝永遠不成立＝I 項被永久關掉，kI 滑桿拉到天上也沒用。直走與朝向這
+    // 兩組原本都是 0，這就是 dashboard 上 drive_kI 沒反應的原因。下面的值取各迴路
+    // settle 窗口的兩三倍（直走 settle 是 1.875 吋 → 2 吋；朝向是角度 → 3 度），日後
+    // 要重調也請維持這個量級。
+    // 注意：在 kI 還是 0 的情況下，只改 startI 不會改變任何行為（0 乘什麼都是 0），
+    // 它只是讓 kI 滑桿「終於有作用」。
+    chassis.set_drive_constants(127, 7, 0, 12.5, 2, 0);
+    chassis.set_heading_constants(64, 1.5, 0, 8, 3); //chassis.set_heading_constants(64, 0.4, 0, 20, 0);      chassis.set_heading_constants(64, 1, 0, 2, 0);
     chassis.set_turn_constants(107, 3.2, .10583, 17.4625, 15.0); //chassis.set_turn_constants(107, 3.2, .10583, 17.4625, 15.0);
     chassis.set_swing_constants(127, 3.704166667, 0.08466667, 21.1666667, 15);
     chassis.set_wall_constants(74, 0.065, 0, 0, 0); //chassis.set_wall_constants(127, 0.529166667, 0, 0, 0);
