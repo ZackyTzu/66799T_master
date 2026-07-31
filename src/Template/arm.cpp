@@ -5,16 +5,18 @@ ArmPosition arm_target = ArmPosition::DOWN;
 // Target angles in ARM degrees, straight from arm_rotation (port 21).
 //
 // To re-measure any of these:
-//   1. Build and run. The arm holds wherever it starts, which becomes 0.
+//   1. Build and run, then press any arm button once so it homes (see
+//      arm_task()) -- 0 becomes the arm's real bottom hard stop, not
+//      wherever it happened to be sitting when the program started.
 //   2. Move the arm by hand (or with the buttons) to the position you want.
 //   3. Read "arm_angle" on the vexdash Graph panel and put that number here.
 // Or drag ARM_*_DEG on the dashboard Config panel and watch the arm move --
 // the values write back live, so you can find them without rebuilding.
 //
-// DOWN is 0, and 0 is now a FIXED physical position -- the arm's bottom hard
-// stop -- not "wherever the arm was at boot". See ARM_ZERO_ANGLE_DEG below.
-float ARM_DOWN_DEG = 0;
-float ARM_POS_1_DEG = 283;
+// DOWN is 0, and 0 is a FIXED physical position -- the arm's bottom hard
+// stop -- not "wherever the arm was at boot".
+float ARM_DOWN_DEG = 1;
+float ARM_POS_1_DEG = 283.5;
 float ARM_POS_2_DEG = 160;   // LEFT sequence's final position, after the cascade is back at 0
 float ARM_POS_3_DEG = 265;  // LEFT sequence's raised position, before coming back to POS_2
 
@@ -32,21 +34,21 @@ bool ARM_ROTATION_REVERSED = false;
 // The arm runs its own PID (see PID.h/PID.cpp, same class the drive/turn PID
 // uses) against the rotation sensor -- tune these directly.
 //
-// kP/kD are 3x the old values. Error used to be motor degrees; it's now arm
-// degrees, which is ~3x smaller for the same physical error (old
-// ARM_GEAR_RATIO), so the gains are scaled up to keep the same volts-per-inch
-// of actual arm movement as before. Re-tune from here.
-float ARM_KP = 2;
-// KI only turns on within ARM_STARTI of target -- lets the I term slowly
-// build enough torque to grind through friction/stiction on the last few
-// degrees (where KP*error alone is too weak to move the arm), without
-// winding up during a large move.
-float ARM_KI = 0.2;
-float ARM_KD = 0.5;
-float ARM_STARTI = 10; // max error (arm degrees) before the I term starts accumulating
+
+float ARM_KP = 3;
+float ARM_KI = 0.003;
+float ARM_KD = 0.3;
+float ARM_STARTI = 0; // max error (arm degrees) before the I term starts accumulating
 
 const int ARM_MAX_VOLTAGE = 97; // out of 127, clamps the PID output
-const int ARM_DOWN_MAX_VOLTAGE = 57; // out of 127, clamps output while descending so the arm goes down slower
+const int ARM_DOWN_MAX_VOLTAGE = 77; // out of 127, clamps output while descending so the arm goes down slower
+
+// Whenever the arm hasn't settled yet, its output is forced to at least this
+// much (in the direction of error), even if KP*error alone would be smaller.
+// Without this, a small-but-not-settled error near a target (most visibly at
+// DOWN/0) produces too little voltage to break static friction, and the arm
+// just stalls short instead of stalling at 0 like it should.
+const int ARM_MIN_VOLTAGE = 50; // out of 127
 
 // Max error (arm degrees) to be considered "arrived" -- see arm_settled below.
 // The old 20 motor degrees was ~6.7 arm degrees; this is a bit tighter. Loosen
@@ -60,6 +62,13 @@ bool arm_settled = false;
 
 bool arm_sensor_ok = false;
 
+// True once the arm has driven down and found its real physical zero (see
+// arm_task()'s homing step). Nothing drives the arm until this is true, so
+// the arm never moves on its own just because the program started -- it only
+// homes the first time a button actually asks the arm to go somewhere.
+bool arm_homed = false;
+static bool arm_home_requested = false;
+
 float tele_arm_angle = 0;
 float tele_arm_target = 0;
 float tele_arm_error = 0;
@@ -70,6 +79,11 @@ float tele_arm_output = 0;
 static float arm_last_good_deg = 0;
 
 void arm_set_position(ArmPosition pos){
+  // Whichever button/routine asks the arm to go somewhere first is what
+  // triggers homing -- not the program starting. See arm_task().
+  if(!arm_homed){
+    arm_home_requested = true;
+  }
   arm_target = pos;
 }
 
@@ -100,6 +114,12 @@ float arm_target_degrees(ArmPosition pos){
   return clamp(arm_deg, ARM_MIN_DEG, ARM_MAX_DEG);
 }
 
+// Homing voltage/timing for arm_task()'s startup homing routine below.
+const int ARM_HOME_VOLTAGE = -40;     // out of 127, negative = descending
+const int ARM_HOME_STALL_RPM = 2;     // |velocity| below this counts as "not moving"
+const int ARM_HOME_STALL_MS = 200;    // how long it must stay stalled to count as "hit the hard stop"
+const int ARM_HOME_TIMEOUT_MS = 2000; // give up and zero wherever it ends up, so a jam can't hang boot forever
+
 void arm_task(){
   // Default brake mode is COAST, which would let the arm sag under gravity
   // between PID updates instead of holding position.
@@ -107,17 +127,53 @@ void arm_task(){
 
   arm_rotation.set_reversed(ARM_ROTATION_REVERSED);
   arm_rotation.set_data_rate(5); // ms, so the 10ms loop always has a fresh sample
-  arm_rotation.reset_position(); // wherever the arm physically is at program start becomes 0
 
   // The motor encoder no longer drives the PID, but the MOTORS tab of the V5
-  // dashboard shows it, so keep it zeroed at the same moment.
+  // dashboard shows it, so keep it zeroed at the same moment as arm_rotation
+  // (inside the homing step below).
   arm.tare_position();
-
-  arm_target = ArmPosition::DOWN;
 
   PID armPID(0, ARM_KP, ARM_KI, ARM_KD, ARM_STARTI);
 
   while(true){
+    // Nothing below here drives the arm until it's been homed at least once
+    // -- that's what keeps the arm from moving on its own just because the
+    // program started. arm_set_position() sets arm_home_requested the first
+    // time ANY position (DOWN, POS_1, ...) is actually asked for, so whatever
+    // button is pressed first triggers this.
+    //
+    // The arm can start at any angle -- however it happened to be sitting
+    // when the program booted -- so just taring the sensor at boot (the old
+    // approach) would make "0" mean "wherever it randomly was," not the real
+    // hard stop. That's why DOWN did nothing the first time it was pressed:
+    // target and position were both "0" already, by definition, with zero
+    // error. Driving down at a fixed voltage until the arm actually stalls
+    // against its hard stop, THEN zeroing, anchors 0 to a real position no
+    // matter where the arm started.
+    if(arm_home_requested){
+      arm.move(ARM_HOME_VOLTAGE);
+      int stalled_ms = 0;
+      int homing_ms = 0;
+      while(stalled_ms < ARM_HOME_STALL_MS && homing_ms < ARM_HOME_TIMEOUT_MS){
+        delay(10);
+        homing_ms += 10;
+        stalled_ms = (fabs(arm.get_actual_velocity()) < ARM_HOME_STALL_RPM) ? stalled_ms + 10 : 0;
+      }
+      arm.move(0);
+      arm_rotation.reset_position(); // the true hard stop, just reached above, becomes 0
+      arm.tare_position();
+      arm_home_requested = false;
+      arm_homed = true;
+    }
+
+    if(!arm_homed){
+      arm.move(0);
+      tele_arm_output = 0;
+      arm_settled = false;
+      delay(10);
+      continue;
+    }
+
     float target = arm_target_degrees(arm_target);
     float position = arm_get_position_deg();
     float error = target - position;
@@ -138,12 +194,17 @@ void arm_task(){
 
     float output = armPID.compute(error);
 
+    bool settled = fabs(error) < ARM_SETTLE_ERROR_DEG;
+    if(!settled && fabs(output) < ARM_MIN_VOLTAGE){
+      output = error > 0 ? ARM_MIN_VOLTAGE : -ARM_MIN_VOLTAGE;
+    }
+
     int max_voltage = output < 0 ? ARM_DOWN_MAX_VOLTAGE : ARM_MAX_VOLTAGE;
     output = clamp(output, (float)-max_voltage, (float)max_voltage);
 
     arm.move(output);
     tele_arm_output = output;
-    arm_settled = fabs(error) < ARM_SETTLE_ERROR_DEG;
+    arm_settled = settled;
     delay(10);
   }
 }

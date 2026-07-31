@@ -719,14 +719,14 @@ void Drive::turn_to_point(float X_position, float Y_position, float extra_angle_
 // Cascade never allowed to extend past this (motor degrees, measured from the
 // tare_position() at the start of control_arcade() below). Small placeholder
 // -- tune once the real extend limit has been tested.
-const int CASCADE_EXTEND_LIMIT_DEG = 3900;
+const int CASCADE_EXTEND_LIMIT_DEG = 3875;
 
-// RIGHT/LEFT button cascade targets (paired with the arm going to POS_1/POS_2
-// respectively). Change these values to retarget.
-int CASCADE_PRESET_DEG = 545;       // RIGHT -> ArmPosition::POS_1, first cascade move
-int CASCADE_PRESET_2_DEG = 595;     // LEFT  -> ArmPosition::POS_3, first cascade move
-int CASCADE_RIGHT_FINAL_DEG = 250;  // RIGHT -> cascade's 2nd move, once the arm settles
-int CASCADE_LEFT_FINAL_DEG = 0;     // LEFT  -> cascade's 2nd move, once the arm reaches POS_3
+// Preset button cascade targets. Change these values to retarget.
+int CASCADE_PRESET_DEG = 545;       // Y -> ArmPosition::POS_1, first cascade move
+int CASCADE_PRESET_2_DEG = 595;     // X -> ArmPosition::POS_3, first cascade move
+int CASCADE_RIGHT_FINAL_DEG = 250;  // Y -> cascade's 2nd move (down a bit), once the arm settles at POS_1
+int CASCADE_LEFT_FINAL_DEG = 0;     // X -> cascade's 2nd move, once the arm reaches POS_3
+const int CASCADE_DOWN_DEG = 0;     // DOWN -> cascade target, same physical spot as CASCADE_LEFT_FINAL_DEG
 const int CASCADE_MOVE_VELOCITY = 117; // move_absolute() speed, out of 200 rpm
 
 // Waiting on cascade/arm move_absolute() inside a preset sequence: max error to
@@ -791,20 +791,24 @@ static bool arm_wait_settled(int seq_id){
 void Drive::control_arcade(){
   double throttle = 0;
   double turn = 0;
-  bool bt_y=false , last_bt_y=false, bumper_bt_y=false;
   bool bt_a=false , last_bt_a=false, bumper_bt_a=false;
-  bool bt_b=false , last_bt_b=false, bumper_bt_b=false;
   bool bt_Right=false , last_bt_Right=false, bumper_bt_Right=false;
-  bool bt_R2=false , last_bt_R2=false, bumper_bt_R2=false;
-  bool bt_L2=false , last_bt_L2=false, bumper_bt_L2=false;
-  bool bt_x=false , last_bt_x=false, bumper_bt_x=false;
-  bool bt_up=false , last_bt_up=false, bumper_bt_up=false;
-  bool bt_down=false , last_bt_down=false, bumper_bt_down=false;
-  bool bt_Left=false , last_bt_Left=false;
-  bool outtake_wait = false;
+  bool bt_y=false , last_bt_y=false;
+  bool bt_b=false , last_bt_b=false;
+  bool bt_x=false , last_bt_x=false;
+  bool bt_down=false , last_bt_down=false;
+  bool y_engaged=false; // set by Y's press, consumed by X to pick which behavior it runs
   cascade_preset_active = false;
   // Task in_fxn(intake_status);
   chassis.drive_stop(MotorBrake::coast);
+
+  // HOLD so the cascade stops dead and stays there the instant .move(0) is
+  // called, in either direction -- previously only move_absolute() (used by
+  // the RIGHT/LEFT presets) actively held; letting go of L1/L2 during manual
+  // control just coasted, most noticeably as the cascade sagging back down
+  // under gravity after a retract.
+  cascade1.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+  cascade2.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 
   // Cascade starts at position 0 and is never allowed to go below it.
   cascade1.tare_position();
@@ -840,49 +844,21 @@ void Drive::control_arcade(){
     chassis.DriveR.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
   }
   
-    //set bt
-      bt_a = master.get_digital(DIGITAL_A);
+    // A: toggles the claw open/closed.
+    bt_a = master.get_digital(DIGITAL_A);
     if(!bt_a and last_bt_a){
       bumper_bt_a = !bumper_bt_a;
-      }
+    }
     last_bt_a = bt_a;
-    bt_b = master.get_digital(DIGITAL_B);
-    if(!bt_b and last_bt_b){
-      bumper_bt_b = !bumper_bt_b;
-      }
-    last_bt_b = bt_b;
-    // bt_Right = master.get_digital(DIGITAL_RIGHT);
-    // if(!bt_Right and last_bt_Right){
-    //   bumper_bt_Right = !bumper_bt_Right;
-    //   }
-    // bt_R2 = master.get_digital(DIGITAL_R2);
-    // if(!bt_R2 and last_bt_R2){
-    //   bumper_bt_R2 = !bumper_bt_R2;
-    //   }
-    // bt_L2 = master.get_digital(DIGITAL_L2);
-    // if(!bt_L2 and last_bt_L2){
-    //   bumper_bt_L2 = !bumper_bt_L2;
-    //   }
-    bt_x = master.get_digital(DIGITAL_X);
-    if(!bt_x and last_bt_x){
-      bumper_bt_x = !bumper_bt_x;
-      }
-    last_bt_x = bt_x;
-    // bt_up = master.get_digital(DIGITAL_UP);
-    // if(!bt_up and last_bt_up){
-    //   bumper_bt_up = !bumper_bt_up;
-    //   }
-    // bt_down = master.get_digital(DIGITAL_DOWN);
-    // if(!bt_down and last_bt_down){
-    //   bumper_bt_down = !bumper_bt_down;
-    //   }
+    claw.set_value(bumper_bt_a);
 
-    //bt
-    // claw.set_value(bt_a);
-    // last_bt_a = bt_a;
-
-    claw.set_value(bumper_bt_b);
-    toggle.set_value(bumper_bt_x);
+    // RIGHT (d-pad): toggles the other pneumatic.
+    bt_Right = master.get_digital(DIGITAL_RIGHT);
+    if(!bt_Right and last_bt_Right){
+      bumper_bt_Right = !bumper_bt_Right;
+    }
+    last_bt_Right = bt_Right;
+    toggle.set_value(bumper_bt_Right);
 
     // Cascade limit switch: this one reads 1 when pressed, 0 when not
     // pressed. Every time it's triggered, re-zero both cascade encoders
@@ -932,64 +908,96 @@ void Drive::control_arcade(){
       }
     }
 
-    bt_Right = master.get_digital(DIGITAL_RIGHT);
-    if(bt_Right and !last_bt_Right){
+    // Y: claw open, cascade to POS_1, arm to POS_1, then once the arm
+    // settles at POS_1, cascade moves down a bit to CASCADE_RIGHT_FINAL_DEG.
+    bt_y = master.get_digital(DIGITAL_Y);
+    if(bt_y and !last_bt_y){
+      y_engaged = true;
       cascade_preset_active = true;
-      int right_seq_id = ++preset_sequence_id;
+      int y_seq_id = ++preset_sequence_id;
+      claw.set_value(false);
+      bumper_bt_a = false; // keep the A toggle in sync, else the claw.set_value(bumper_bt_a) above re-closes this next tick
       cascade1.move_absolute(CASCADE_PRESET_DEG, CASCADE_MOVE_VELOCITY);
       cascade2.move_absolute(CASCADE_PRESET_DEG, CASCADE_MOVE_VELOCITY);
       arm_set_position(ArmPosition::POS_1);
-      claw.set_value(false);
       // Runs on its own task so waiting for the arm doesn't block the rest
       // of control_arcade() (drive, intake, other buttons).
-      pros::Task([right_seq_id]{
-        if(!arm_wait_settled(right_seq_id)) return;
+      pros::Task([y_seq_id]{
+        if(!arm_wait_settled(y_seq_id)) return;
         cascade1.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
         cascade2.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
       });
     }
-    last_bt_Right = bt_Right;
+    last_bt_y = bt_y;
 
+    // B: arm to DOWN only -- cascade untouched.
+    bt_b = master.get_digital(DIGITAL_B);
+    if(bt_b and !last_bt_b){
+      // Cancels any preset sequence still stepping through its moves, so it
+      // can't send the arm back up after this.
+      ++preset_sequence_id;
+      y_engaged = false; // arm's leaving the Y-raised state, so X shouldn't run the full sequence next
+      arm_set_position(ArmPosition::DOWN);
+    }
+    last_bt_b = bt_b;
+
+    // X: replaces the old dedicated LEFT (d-pad) button. If Y was pressed
+    // since the last reset, run the full former-X sequence (extend cascade,
+    // raise arm to POS_3, retract cascade, settle arm at POS_2). Otherwise
+    // just do the former-LEFT move: arm to POS_2 only, cascade untouched.
+    bt_x = master.get_digital(DIGITAL_X);
+    if(bt_x and !last_bt_x){
+      if(y_engaged){
+        y_engaged = false; // consumed
+        cascade_preset_active = true;
+        int x_seq_id = ++preset_sequence_id;
+        cascade1.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
+        cascade2.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
+        // Run on its own task so the waits between steps don't block the rest
+        // of control_arcade() (drive, intake, other buttons). Each wait bails
+        // out if the driver takes the cascade back over with L1/L2, or presses
+        // another preset.
+        pros::Task([x_seq_id]{
+          // 1. cascade is already heading to CASCADE_PRESET_2_DEG; give it 100ms
+          //    to start moving, then 2. raise the arm to POS_3.
+          pros::delay(100);
+          if(!preset_still_owns(x_seq_id)) return;
+          arm_set_position(ArmPosition::POS_3);
+          if(!arm_wait_settled(x_seq_id)) return;
+
+          // 3. retract the cascade all the way back to CASCADE_LEFT_FINAL_DEG.
+          cascade1.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
+          cascade2.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
+          if(!cascade_wait_settled(x_seq_id, CASCADE_LEFT_FINAL_DEG)) return;
+
+          // 4. rotate the arm down to POS_2, cascade holds where it is --
+          //    move_absolute() keeps it there, and cascade_preset_active stays
+          //    true so the main loop won't zero its voltage.
+          arm_set_position(ArmPosition::POS_2);
+        });
+      }
+      else{
+        // Cancels any preset sequence still stepping through its moves, so it
+        // can't send the arm back up after this.
+        ++preset_sequence_id;
+        arm_set_position(ArmPosition::POS_2);
+      }
+    }
+    last_bt_x = bt_x;
+
+    // DOWN (d-pad): cascade AND arm both back to 0.
     bt_down = master.get_digital(DIGITAL_DOWN);
     if(bt_down and !last_bt_down){
       // Cancels any preset sequence still stepping through its moves, so it
-      // can't send the arm back up after this. The cascade keeps holding
-      // wherever it is; only the arm comes down.
+      // can't send the arm (or cascade) back up after this.
       ++preset_sequence_id;
+      y_engaged = false; // full reset, so X shouldn't run the full sequence next
+      cascade_preset_active = true;
+      cascade1.move_absolute(CASCADE_DOWN_DEG, CASCADE_MOVE_VELOCITY);
+      cascade2.move_absolute(CASCADE_DOWN_DEG, CASCADE_MOVE_VELOCITY);
       arm_set_position(ArmPosition::DOWN);
     }
     last_bt_down = bt_down;
-
-    bt_Left = master.get_digital(DIGITAL_LEFT);
-    if(bt_Left and !last_bt_Left){
-      cascade_preset_active = true;
-      int left_seq_id = ++preset_sequence_id;
-      cascade1.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
-      cascade2.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
-      // Run on its own task so the waits between steps don't block the rest
-      // of control_arcade() (drive, intake, other buttons). Each wait bails
-      // out if the driver takes the cascade back over with L1/L2, or presses
-      // DOWN / another preset.
-      pros::Task([left_seq_id]{
-        // 1. cascade is already heading to CASCADE_PRESET_2_DEG; give it 100ms
-        //    to start moving, then 2. raise the arm to POS_3.
-        pros::delay(100);
-        if(!preset_still_owns(left_seq_id)) return;
-        arm_set_position(ArmPosition::POS_3);
-        if(!arm_wait_settled(left_seq_id)) return;
-
-        // 3. retract the cascade all the way back to CASCADE_LEFT_FINAL_DEG.
-        cascade1.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
-        cascade2.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
-        if(!cascade_wait_settled(left_seq_id, CASCADE_LEFT_FINAL_DEG)) return;
-
-        // 4. rotate the arm down to POS_2, cascade holds where it is --
-        //    move_absolute() keeps it there, and cascade_preset_active stays
-        //    true so the main loop won't zero its voltage.
-        arm_set_position(ArmPosition::POS_2);
-      });
-    }
-    last_bt_Left = bt_Left;
   }
 }
 

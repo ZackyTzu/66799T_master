@@ -3,7 +3,6 @@
 const int CASCADE_SCORE_VELOCITY = 100;   // move_absolute() speed for score(), out of 200 rpm
 const int CASCADE_SCORE_SETTLE_DEG = 20;  // max cascade error to be considered "arrived"
 const int CASCADE_SCORE_TIMEOUT_MS = 3000; // give up waiting and move on after this long
-
 void score(ScoringLevel level, ArmPosition arm_pos){
   int cascade_target = (int)level;
 
@@ -26,7 +25,7 @@ chassis.drive_with_voltage(-67,-67);
 delay(500);
 score(ScoringLevel::LEVEL_1, ArmPosition::DOWN);
 chassis.drive_distance(15.75,307,false);
-chassis.drive_distance(8,284,false);
+chassis.drive_distance(8,290,false);
 score(ScoringLevel::LEVEL_0, ArmPosition::DOWN);
 delay(200);
 claw.set_value(false);
@@ -36,14 +35,15 @@ chassis.drive_distance(-11.5);
 score(ScoringLevel::LEVEL_0, ArmPosition::DOWN);
 chassis.turn_to_angle(245.5);
 chassis.drive_max_voltage = 107;
-chassis.drive_distance(18.5);
+chassis.drive_distance(19.5,true);
 chassis.turn_to_angle(220);
-// chassis.drive_distance(5);
 chassis.drive_max_voltage = 87;
-chassis.drive_distance(3,200,false);
+chassis.drive_distance(4,218,false);
 claw.set_value(true);
-chassis.drive_distance(-20,280,false);
-chassis.drive_stop(MotorBrake::brake);
+chassis.turn_to_angle(255);
+score(ScoringLevel::LEVEL_2, ArmPosition::DOWN);
+// chassis.drive_distance(-20,280,false);
+// chassis.drive_stop(MotorBrake::brake);
 
 }
 
