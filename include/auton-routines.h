@@ -5,8 +5,9 @@
 enum class ScoringLevel {
   LEVEL_0 = 0,
   LEVEL_1 = 300,
-  LEVEL_2 = 1000,
-  LEVEL_3 = 2000,
+  LEVEL_2 = 2000,
+  
+  LEVEL_3 = 2750,
   LEVEL_4 = 3800
 };
 

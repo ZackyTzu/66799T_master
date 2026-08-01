@@ -46,6 +46,8 @@ void initialize() {
 	vexdash::watch_config("kP",    &ARM_KP,        "arm/pid");
 	vexdash::watch_config("kI",    &ARM_KI,        "arm/pid");
 	vexdash::watch_config("kD",    &ARM_KD,        "arm/pid");
+	vexdash::watch_config("kG",    &ARM_KG,        "arm/pid");
+	vexdash::watch_config("minV",  &ARM_MIN_VOLTAGE, "arm/pid");
 
 	// --- vexdash: on-demand PID tests (set the target, toggle "run", watch the Graph) ---
 	vexdash::watch_config("test_distance", &test_distance,  "drive/test"); // inches

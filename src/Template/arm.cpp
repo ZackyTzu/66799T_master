@@ -16,9 +16,11 @@ ArmPosition arm_target = ArmPosition::DOWN;
 // DOWN is 0, and 0 is a FIXED physical position -- the arm's bottom hard
 // stop -- not "wherever the arm was at boot".
 float ARM_DOWN_DEG = 1;
-float ARM_POS_1_DEG = 283.5;
-float ARM_POS_2_DEG = 160;   // LEFT sequence's final position, after the cascade is back at 0
+float ARM_POS_1_DEG = 284;
+float ARM_POS_2_DEG = 157.5;   // LEFT sequence's final position, after the cascade is back at 0
 float ARM_POS_3_DEG = 265;  // LEFT sequence's raised position, before coming back to POS_2
+float ARM_CLAW_CLEAR_DEG = 180; // rotated to before the claw opens, if the arm was resting at POS_2 (~160) -- see Drive::control_arcade's A-button handling in drive.cpp
+float ARM_DOWN_HOLD_DEG = 15; // B's target instead of DOWN, if the arm was at POS_2 with the claw closed -- see Drive::control_arcade's B-button handling in drive.cpp
 
 // Soft travel limits in arm degrees. Targets are clamped here so a bad preset
 // stalls the motor against nothing instead of slamming the hard stop.
@@ -35,20 +37,41 @@ bool ARM_ROTATION_REVERSED = false;
 // uses) against the rotation sensor -- tune these directly.
 //
 
-float ARM_KP = 3;
-float ARM_KI = 0.003;
-float ARM_KD = 0.3;
-float ARM_STARTI = 0; // max error (arm degrees) before the I term starts accumulating
+float ARM_KP = 2;
+float ARM_KI = 0;
+float ARM_KD = 0.3; // damps the overshoot/oscillation that KP alone produces near the target
+float ARM_STARTI = 10; // max error (arm degrees) before the I term starts accumulating
+
+// Constant gravity feedforward, added to the PID output every loop (not just
+// while unsettled) so the arm doesn't rely on KP alone to hold itself up.
+//
+// To measure it: get the arm settled (not oscillating) at the problem angle,
+// then read the steady-state "arm_output" value on the vexdash Graph panel --
+// that's roughly how many volts it takes just to hold there against gravity.
+// Set ARM_KG to that. Do this at your highest-torque position (looks like
+// POS_2/160 here); a single constant won't be exactly right at every angle,
+// but it removes most of the load KP+KD would otherwise have to fight.
+float ARM_KG = 0;
 
 const int ARM_MAX_VOLTAGE = 97; // out of 127, clamps the PID output
 const int ARM_DOWN_MAX_VOLTAGE = 77; // out of 127, clamps output while descending so the arm goes down slower
+const int ARM_SLOW_MAX_VOLTAGE = 77; // out of 127, clamps output (either direction) while heading to CLAW_CLEAR or DOWN_HOLD, so those claw-sequence moves are gentler than a normal preset move
 
 // Whenever the arm hasn't settled yet, its output is forced to at least this
 // much (in the direction of error), even if KP*error alone would be smaller.
 // Without this, a small-but-not-settled error near a target (most visibly at
 // DOWN/0) produces too little voltage to break static friction, and the arm
 // just stalls short instead of stalling at 0 like it should.
-const int ARM_MIN_VOLTAGE = 50; // out of 127
+//
+// Keep this as small as it can be and still break static friction. Too high
+// and it overpowers KP right at the settle boundary: the arm gets slammed
+// toward the target at full ARM_MIN_VOLTAGE the instant error crosses
+// ARM_SETTLE_ERROR_DEG, overshoots past it, error flips sign, and it gets
+// slammed back the other way -- a bang-bang limit cycle that looks like wild
+// oscillation and never settles. That's almost certainly what a violent
+// oscillation right as the arm nears a target is -- lower this first before
+// touching KP/KD. Live-tunable on the dashboard (arm/pid, "minV").
+float ARM_MIN_VOLTAGE = 25; // out of 127
 
 // Max error (arm degrees) to be considered "arrived" -- see arm_settled below.
 // The old 20 motor degrees was ~6.7 arm degrees; this is a bit tighter. Loosen
@@ -109,6 +132,8 @@ float arm_target_degrees(ArmPosition pos){
     case ArmPosition::POS_1: arm_deg = ARM_POS_1_DEG; break;
     case ArmPosition::POS_2: arm_deg = ARM_POS_2_DEG; break;
     case ArmPosition::POS_3: arm_deg = ARM_POS_3_DEG; break;
+    case ArmPosition::CLAW_CLEAR: arm_deg = ARM_CLAW_CLEAR_DEG; break;
+    case ArmPosition::DOWN_HOLD: arm_deg = ARM_DOWN_HOLD_DEG; break;
     default:                 arm_deg = ARM_DOWN_DEG;  break;
   }
   return clamp(arm_deg, ARM_MIN_DEG, ARM_MAX_DEG);
@@ -192,14 +217,15 @@ void arm_task(){
       continue;
     }
 
-    float output = armPID.compute(error);
+    float output = armPID.compute(error) + ARM_KG;
 
     bool settled = fabs(error) < ARM_SETTLE_ERROR_DEG;
     if(!settled && fabs(output) < ARM_MIN_VOLTAGE){
       output = error > 0 ? ARM_MIN_VOLTAGE : -ARM_MIN_VOLTAGE;
     }
 
-    int max_voltage = output < 0 ? ARM_DOWN_MAX_VOLTAGE : ARM_MAX_VOLTAGE;
+    bool slow_target = (arm_target == ArmPosition::CLAW_CLEAR || arm_target == ArmPosition::DOWN_HOLD);
+    int max_voltage = slow_target ? ARM_SLOW_MAX_VOLTAGE : (output < 0 ? ARM_DOWN_MAX_VOLTAGE : ARM_MAX_VOLTAGE);
     output = clamp(output, (float)-max_voltage, (float)max_voltage);
 
     arm.move(output);

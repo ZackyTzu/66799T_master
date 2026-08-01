@@ -26,6 +26,7 @@ extern Motor arm;
 
 extern adi::DigitalOut claw;
 extern adi::DigitalOut toggle;
+extern adi::DigitalOut op_toggle;
 extern adi::DigitalIn cascade_limit;
 
 extern Distance distance_sensorL;
