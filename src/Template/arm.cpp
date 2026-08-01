@@ -16,11 +16,12 @@ ArmPosition arm_target = ArmPosition::DOWN;
 // DOWN is 0, and 0 is a FIXED physical position -- the arm's bottom hard
 // stop -- not "wherever the arm was at boot".
 float ARM_DOWN_DEG = 1;
-float ARM_POS_1_DEG = 284;
+float ARM_POS_1_DEG = 287;
 float ARM_POS_2_DEG = 157.5;   // LEFT sequence's final position, after the cascade is back at 0
 float ARM_POS_3_DEG = 265;  // LEFT sequence's raised position, before coming back to POS_2
 float ARM_CLAW_CLEAR_DEG = 180; // rotated to before the claw opens, if the arm was resting at POS_2 (~160) -- see Drive::control_arcade's A-button handling in drive.cpp
-float ARM_DOWN_HOLD_DEG = 15; // B's target instead of DOWN, if the arm was at POS_2 with the claw closed -- see Drive::control_arcade's B-button handling in drive.cpp
+float ARM_DOWN_HOLD_DEG = 28.5; // B's target instead of DOWN, if the arm was at POS_2 with the claw closed -- see Drive::control_arcade's B-button handling in drive.cpp
+float ARM_DOWN_HOLD_FINAL_DEG = 10; // where A continues to from DOWN_HOLD once the claw opens -- see Drive::control_arcade's A-button handling in drive.cpp
 
 // Soft travel limits in arm degrees. Targets are clamped here so a bad preset
 // stalls the motor against nothing instead of slamming the hard stop.
@@ -134,6 +135,7 @@ float arm_target_degrees(ArmPosition pos){
     case ArmPosition::POS_3: arm_deg = ARM_POS_3_DEG; break;
     case ArmPosition::CLAW_CLEAR: arm_deg = ARM_CLAW_CLEAR_DEG; break;
     case ArmPosition::DOWN_HOLD: arm_deg = ARM_DOWN_HOLD_DEG; break;
+    case ArmPosition::DOWN_HOLD_FINAL: arm_deg = ARM_DOWN_HOLD_FINAL_DEG; break;
     default:                 arm_deg = ARM_DOWN_DEG;  break;
   }
   return clamp(arm_deg, ARM_MIN_DEG, ARM_MAX_DEG);

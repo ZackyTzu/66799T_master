@@ -23,8 +23,9 @@ enum class DisplayTab {
 
 enum class AutonRoutine {
     left = 0,
-    right = 1,
-    sawp = 2
+    left2 = 1,
+    right = 2,
+    right2 = 3
 };
 
 extern AutonRoutine selected_auton;

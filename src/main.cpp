@@ -89,7 +89,7 @@ void disabled() {
 
 void competition_initialize() {
 	init();
-	toggle.set_value(false);
+	toggle.set_value(true);
 	claw.set_value(true);
 	delay(2250);
 	inertial.tare_euler(); // idk the difference between this and inertial.tare(). Both works. Does not work if called in competition_initialize() or disabled() for some reason.
@@ -112,11 +112,14 @@ void autonomous() {
 		case AutonRoutine::left:
 			left();
 			break;
+		case AutonRoutine::left2:
+			left2();
+			break;
 		case AutonRoutine::right:
 			right();
 			break;
-		case AutonRoutine::sawp:
-			sawp();
+		case AutonRoutine::right2:
+			right2();
 			break;
 	}
 }

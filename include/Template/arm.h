@@ -17,7 +17,12 @@ enum class ArmPosition {
     // claw closed -- holds a game piece just off the ground instead of
     // slamming it down while still gripped. See Drive::control_arcade's
     // B-button handling in drive.cpp.
-    DOWN_HOLD = 5
+    DOWN_HOLD = 5,
+    // Where A sends the arm the rest of the way once it opens the claw from
+    // DOWN_HOLD -- stops a bit short of true DOWN instead of continuing all
+    // the way to the hard stop. See Drive::control_arcade's A-button
+    // handling in drive.cpp.
+    DOWN_HOLD_FINAL = 6
 };
 
 extern ArmPosition arm_target;
@@ -39,6 +44,9 @@ extern float ARM_CLAW_CLEAR_DEG;
 
 // Target angle for ArmPosition::DOWN_HOLD -- see the enum above.
 extern float ARM_DOWN_HOLD_DEG;
+
+// Target angle for ArmPosition::DOWN_HOLD_FINAL -- see the enum above.
+extern float ARM_DOWN_HOLD_FINAL_DEG;
 
 // Soft travel limits in arm degrees. Every target is clamped into this range,
 // so a bad preset can't drive the arm into its hard stop at full voltage.

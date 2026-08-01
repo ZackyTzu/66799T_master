@@ -241,11 +241,12 @@ MotorInfo dashboard_motors[10] = {
 };
 
 // Auton Select box geometry, shared between drawing and touch hit-testing.
-const int AUTON_BOX_W = 120;
+const int AUTON_BOX_W = 100;
 const int AUTON_BOX_H = 65;
 const int AUTON_BOX_Y = 45;
-const int AUTON_GAP = 20;
-const int AUTON_START_X = (480 - (AUTON_BOX_W * 3 + AUTON_GAP * 2)) / 2;
+const int AUTON_GAP = 15;
+const int AUTON_COUNT = 4;
+const int AUTON_START_X = (480 - (AUTON_BOX_W * AUTON_COUNT + AUTON_GAP * (AUTON_COUNT - 1))) / 2;
 
 // The (x,y) print_at overload always treats (x,y) as the TOP-LEFT corner of
 // the text, even for the "_CENTER" format variants -- they do NOT auto-center
@@ -478,12 +479,12 @@ void dashboard_draw_position_tab(){
 }
 
 void dashboard_draw_auton_tab(){
-  const char* labels[3] = {"left", "right", "sawp"};
+  const char* labels[AUTON_COUNT] = {"left", "left2", "right", "right2"};
   const int label_pad = 8;
   const int radius = 10;
   const int shadow_offset = 3;
 
-  for(int i = 0; i < 3; i++){
+  for(int i = 0; i < AUTON_COUNT; i++){
     int x0 = AUTON_START_X + i * (AUTON_BOX_W + AUTON_GAP);
     int x1 = x0 + AUTON_BOX_W;
     int label_y = AUTON_BOX_Y + AUTON_BOX_H / 2 - 8;
@@ -585,7 +586,7 @@ void dashboard_handle_touch(){
   }
 
   if(current_tab == DisplayTab::AUTON_SELECT){
-    for(int i = 0; i < 3; i++){
+    for(int i = 0; i < AUTON_COUNT; i++){
       int x0 = AUTON_START_X + i * (AUTON_BOX_W + AUTON_GAP);
       int x1 = x0 + AUTON_BOX_W;
       if(touch.x >= x0 && touch.x <= x1 && touch.y >= AUTON_BOX_Y && touch.y <= AUTON_BOX_Y + AUTON_BOX_H){

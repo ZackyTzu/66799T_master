@@ -724,7 +724,7 @@ const int CASCADE_EXTEND_LIMIT_DEG = 3800;
 // Preset button cascade targets. Change these values to retarget.
 int CASCADE_PRESET_DEG = 545;       // Y -> ArmPosition::POS_1, first cascade move
 int CASCADE_PRESET_2_DEG = 595;     // X -> ArmPosition::POS_3, first cascade move
-int CASCADE_RIGHT_FINAL_DEG = 230;  // Y -> cascade's 2nd move (down a bit), once the arm settles at POS_1
+int CASCADE_RIGHT_FINAL_DEG = 220;  // Y -> cascade's 2nd move (down a bit), once the arm settles at POS_1
 int CASCADE_LEFT_FINAL_DEG = 0;     // X -> cascade's 2nd move, once the arm reaches POS_3
 const int CASCADE_MOVE_VELOCITY = 114; // move_absolute() speed, out of 200 rpm
 
@@ -736,6 +736,15 @@ const int PRESET_STEP_TIMEOUT_MS = 3000;
 // for the *previous* target) briefly after arm_set_position() -- wait this long
 // before trusting it.
 const int ARM_SETTLE_LATENCY_MS = 30;
+
+// Looser than ARM_SETTLE_ERROR_DEG, used only by the A-button claw-open wait
+// (arm_wait_settled_solo). If the arm is stuck/jammed short of CLAW_CLEAR or
+// DOWN, waiting on the tight global settle would hold the claw shut until
+// PRESET_STEP_TIMEOUT_MS expires. This lets it open as soon as the arm is
+// reasonably clear, even if it never fully settles. Still well under the
+// smallest gap between claw-sequence targets (DOWN=1 to DOWN_HOLD=15, 14 deg)
+// so it doesn't open before the arm has actually moved out of the way.
+const float ARM_CLAW_OPEN_SETTLE_ERROR_DEG = 10;
 
 // True while a RIGHT/LEFT preset sequence owns the cascade. Cleared as soon as
 // the driver takes manual control with L1/L2, which also tells a running
@@ -789,7 +798,7 @@ static bool arm_wait_settled(int seq_id){
 static bool arm_wait_settled_solo(int seq_id){
   delay(ARM_SETTLE_LATENCY_MS);
   int waited_ms = 0;
-  while(!arm_settled){
+  while(fabs(tele_arm_error) > ARM_CLAW_OPEN_SETTLE_ERROR_DEG){
     if(seq_id != preset_sequence_id) return false;
     delay(10);
     waited_ms += 10;
@@ -884,9 +893,9 @@ void Drive::control_arcade(){
         start_claw_open_sequence(ArmPosition::CLAW_CLEAR, bumper_bt_a);
       }
       else if(opening && arm_settled && arm_target == ArmPosition::DOWN_HOLD){
-        // B stopped the arm here instead of DOWN because the claw was closed
-        // (see B below) -- finish the trip down, then open.
-        start_claw_open_sequence(ArmPosition::DOWN, bumper_bt_a);
+        // B stopped the arm here instead of going all the way down (see B
+        // below) -- finish the trip down to DOWN_HOLD_FINAL, then open.
+        start_claw_open_sequence(ArmPosition::DOWN_HOLD_FINAL, bumper_bt_a);
       }
       else{
         bumper_bt_a = !bumper_bt_a;
@@ -986,18 +995,22 @@ void Drive::control_arcade(){
     last_bt_y = bt_y;
 
     // B: arm to DOWN -- cascade untouched. Except if the arm is currently
-    // settled at POS_2 (~160 degrees) with the claw closed: then it stops
-    // at DOWN_HOLD (~15 degrees) instead of going all the way down, so a
-    // held game piece doesn't get slammed into the ground while still
-    // gripped. See A above for how DOWN_HOLD gets the arm the rest of the
-    // way down once the claw opens.
+    // headed to or settled at POS_2 (~160 degrees, reached via X) with the
+    // claw closed: then it stops at DOWN_HOLD (~30 degrees) instead of going
+    // all the way down, so a held game piece doesn't get slammed into the
+    // ground while still gripped. See A above for how DOWN_HOLD gets the arm
+    // the rest of the way down (to DOWN_HOLD_FINAL, ~10 degrees) once the
+    // claw opens. Deliberately not gated on arm_settled -- X sets arm_target
+    // to POS_2 synchronously, so B pressed mid-transit (before the arm
+    // physically gets there) should still catch this case instead of
+    // falling through to DOWN.
     bt_b = master.get_digital(DIGITAL_B);
     if(bt_b and !last_bt_b){
       // Cancels any preset sequence still stepping through its moves, so it
       // can't send the arm back up after this.
       ++preset_sequence_id;
       y_engaged = false; // arm's leaving the Y-raised state, so X shouldn't run the full sequence next
-      if(arm_settled && arm_target == ArmPosition::POS_2 && bumper_bt_a){
+      if(arm_target == ArmPosition::POS_2 && bumper_bt_a){
         arm_set_position(ArmPosition::DOWN_HOLD);
       }
       else{
@@ -1013,10 +1026,11 @@ void Drive::control_arcade(){
     bt_x = master.get_digital(DIGITAL_X);
     if(bt_x and !last_bt_x){
       if(y_engaged){
+        claw.set_value(true);
+        bumper_bt_a = true; // keep the A toggle in sync, else claw.set_value(bumper_bt_a) at the A handler above would reopen it next tick
         y_engaged = false; // consumed
         cascade_preset_active = true;
         int x_seq_id = ++preset_sequence_id;
-        claw.set_value(true);
         cascade1.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
         cascade2.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
         // Run on its own task so the waits between steps don't block the rest
