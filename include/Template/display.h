@@ -36,7 +36,9 @@ void dashboard_handle_touch();
 void dashboard_draw_tab_bar();
 void dashboard_draw_motors_tab();
 void dashboard_draw_position_tab();
-void dashboard_draw_auton_tab();
+// clear_first=false skips the black fills and just repaints the boxes on top of
+// themselves -- used by the periodic self-heal redraw so it doesn't flicker.
+void dashboard_draw_auton_tab(bool clear_first = true);
 // void dashboard_draw_sao_tab(); // SAO tab disabled, see sao_gallery.cpp
 
 // SAO gallery: desktop screenshots you can flip through with Back/Next (see sao_gallery.cpp).

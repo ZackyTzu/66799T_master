@@ -504,6 +504,13 @@ void Drive::set_coordinates(float X_position, float Y_position, float orientatio
   odom.set_position(X_position, Y_position, orientation_deg, get_ForwardTracker_position(), get_SidewaysTracker_position());
   set_heading(orientation_deg);
 
+  // TODO (leaks a task per call -- left as-is for now, fix after testing):
+  // pros::Task's destructor does NOT stop or remove the underlying FreeRTOS
+  // task. suspend() just parks it, and delete only frees the small wrapper
+  // object -- the suspended task keeps its TCB and 32KB stack forever. So
+  // every call to set_coordinates() (once per autonomous(), plus any routine
+  // that resets coordinates) permanently leaks 32KB.
+  // The fix is odom_task->remove() instead of suspend(), then delete.
   if (odom_task != nullptr) { // is this if() even necessary
     odom_task->suspend();    // stop task
     delete odom_task;      // free memory
@@ -717,7 +724,7 @@ void Drive::turn_to_point(float X_position, float Y_position, float extra_angle_
 
 
 // Cascade never allowed to extend past this (motor degrees, measured from the
-// tare_position() at the start of control_arcade() below). Small placeholder
+// one-time tare_position() in initialize(), see main.cpp). Small placeholder
 // -- tune once the real extend limit has been tested.
 const int CASCADE_EXTEND_LIMIT_DEG = 3800;
 
@@ -807,15 +814,27 @@ static bool arm_wait_settled_solo(int seq_id){
   return seq_id == preset_sequence_id;
 }
 
-// Rotates the arm to clear_pos, then opens the claw once it gets there.
+// Raised by a claw-open sequence task once the arm has cleared and the claw
+// should now open; consumed by control_arcade()'s main loop on its next tick.
+//
+// Behaviour is unchanged from writing bumper_bt_a directly: the claw only ever
+// physically moves on the main loop's claw.set_value(bumper_bt_a) call, so it
+// still opens on the same iteration it always did. What changes is ownership --
+// bumper_bt_a is now written by one task only. Before, the sequence task wrote
+// into control_arcade()'s stack while the driver's A handler wrote the same
+// variable, so an A press landing mid-sequence could be silently undone (or
+// undo the sequence) depending on which task won.
+static volatile bool claw_open_pending = false;
+
+// Rotates the arm to clear_pos, then requests the claw open once it gets there.
 // Used by A's claw-open handling below whenever the arm is resting somewhere
 // the claw would hit something if it opened immediately.
-static void start_claw_open_sequence(ArmPosition clear_pos, bool &bumper_bt_a){
+static void start_claw_open_sequence(ArmPosition clear_pos){
   int claw_seq_id = ++preset_sequence_id;
   arm_set_position(clear_pos);
-  pros::Task([claw_seq_id, &bumper_bt_a]{
+  pros::Task([claw_seq_id]{
     if(!arm_wait_settled_solo(claw_seq_id)) return;
-    bumper_bt_a = false;
+    claw_open_pending = true;
   });
 }
 
@@ -846,9 +865,15 @@ void Drive::control_arcade(){
   cascade1.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
   cascade2.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 
-  // Cascade starts at position 0 and is never allowed to go below it.
-  cascade1.tare_position();
-  cascade2.tare_position();
+  // NOTE: deliberately does NOT tare the cascade encoders. It used to, and
+  // that was the bug where the cascade "started at 0 while raised": autonomous
+  // usually ends with the cascade still up, then opcontrol began by calling
+  // tare_position() right here, which declared that raised height to be 0. The
+  // L2 retract guard below (get_position() <= 0) then refused to bring it down,
+  // and every preset target was off by however high auton had left it.
+  // Zeroing now happens once in initialize() (see main.cpp), so 0 always means
+  // the height the cascade was at when the program started, and cascade_limit
+  // re-zeros it below whenever the real bottom stop is actually hit.
 
   while(1){
   throttle = master.get_analog(ANALOG_LEFT_Y);
@@ -886,16 +911,25 @@ void Drive::control_arcade(){
     // to clear itself, and the claw only opens once the arm gets there --
     // opening directly at 160 hits the arm. Closing, and opening from any
     // other arm position, toggles immediately as before.
+    // A claw-clear sequence that finished waiting for the arm applies its
+    // open here, in the task that owns bumper_bt_a. Consumed before the A
+    // press below is evaluated, exactly where the sequence task's own write
+    // would have already landed.
+    if(claw_open_pending){
+      claw_open_pending = false;
+      bumper_bt_a = false;
+    }
+
     bt_a = master.get_digital(DIGITAL_A);
     if(!bt_a and last_bt_a){
       bool opening = bumper_bt_a; // bumper_bt_a true = closed; about to flip to false = open (see Y above: claw.set_value(false) opens)
       if(opening && arm_settled && arm_target == ArmPosition::POS_2){
-        start_claw_open_sequence(ArmPosition::CLAW_CLEAR, bumper_bt_a);
+        start_claw_open_sequence(ArmPosition::CLAW_CLEAR);
       }
       else if(opening && arm_settled && arm_target == ArmPosition::DOWN_HOLD){
         // B stopped the arm here instead of going all the way down (see B
         // below) -- finish the trip down to DOWN_HOLD_FINAL, then open.
-        start_claw_open_sequence(ArmPosition::DOWN_HOLD_FINAL, bumper_bt_a);
+        start_claw_open_sequence(ArmPosition::DOWN_HOLD_FINAL);
       }
       else{
         bumper_bt_a = !bumper_bt_a;
@@ -1064,6 +1098,15 @@ void Drive::control_arcade(){
       }
     }
     last_bt_x = bt_x;
+
+    // MUST stay here. Without it this loop never blocks, so the FreeRTOS idle
+    // task (priority 0, vs this task's 8) never gets scheduled -- and idle is
+    // what reclaims a finished task's TCB and 32KB stack. Every Y/X/A preset
+    // press below spawns a pros::Task, so without this delay each press leaks
+    // 32KB permanently and the brain eventually runs out of heap and freezes
+    // mid-match until it's restarted. It also keeps this loop from flooding
+    // the smart port bus with unthrottled reads and .move() writes.
+    delay(10);
   }
 }
 

@@ -1,8 +1,13 @@
 #include "main.h"
 
 IMU inertial(17);
-Rotation fwd_tracker(2); // I just put a random number here but we dont have a forward tracker
-Rotation sideways_tracker(1);  // I just put a random number here but we dont have a sideways tracker
+// Placeholders -- we don't have tracking wheels. DriveStyle::ZERO_TRACKER means
+// Drive::get_ForwardTracker_position()/get_SidewaysTracker_position() never
+// read these, so the ports only have to be ones nothing else claims.
+// They used to sit on 2 and 1, which collide with distance_sensorL (port 2)
+// and rightMiddle (port 1) below -- moved to 9 and 10, which are free.
+Rotation fwd_tracker(9);
+Rotation sideways_tracker(10);
 
 // 66799T
 // negative port number means reversed (there is no separate "reversed" constructor argument)

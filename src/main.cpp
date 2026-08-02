@@ -68,14 +68,30 @@ void initialize() {
 
 	// Start vexdash over the ESP32 Smart Port bridge (port 11 @ 115200 baud).
 	// The ESP32 relays telemetry to the dashboard over WiFi (ws://192.168.4.1).
-	// NOTE: port 11 is also used by distance_sensorL in robot-config.cpp — a
-	// smart port can host only one device, so move one of them if both are wired.
+	// Port 11 is free — nothing in robot-config.cpp claims it. (An older comment
+	// here warned about a clash with distance_sensorL; that sensor is on port 2.)
 	// Smart Port path leaves stdout free (printf still works); HUD off by default.
 	vexdash::init_smartport(11, 115200);
 
 	// HOLD so the arm stays put under gravity when no button is pressed
 	// (arm_task() would normally set this, but it's disabled above).
 	arm.set_brake_mode(pros::E_MOTOR_BRAKE_BRAKE);
+
+	// The ONLY place the cascade encoders get zeroed at startup, so "0" always
+	// means the height the cascade was physically at when the program started
+	// -- nothing later redefines it.
+	//
+	// This used to be done at the top of both autonomous() and
+	// Drive::control_arcade(). Since autonomous normally ends with the cascade
+	// still raised, opcontrol's tare then declared that raised height to be 0:
+	// L2 wouldn't retract (its guard is get_position() <= 0) and every preset
+	// target was shifted by however high auton had left it.
+	//
+	// cascade_limit (see control_arcade) still re-zeros on every press of the
+	// bottom hard stop, so any drift picked up over a match self-corrects the
+	// first time the cascade comes all the way down.
+	cascade1.tare_position();
+	cascade2.tare_position();
 
 	start_dashboard();
 	start_arm_task();
@@ -100,12 +116,10 @@ ASSET(curveLeft_txt);
 void autonomous() {
 	chassis.set_coordinates(0, 0, 0);
 
-	// Cascade encoder "0" is only tared in Drive::control_arcade() (teleop),
-	// so without this, ScoringLevel::LEVEL_0 in auton would target whatever
-	// position the encoder happened to read at power-on -- not the true
-	// physical bottom the robot is placed at before a match.
-	cascade1.tare_position();
-	cascade2.tare_position();
+	// Cascade encoders are NOT tared here. initialize() already zeroed them at
+	// program start, and re-zeroing at the top of autonomous would reintroduce
+	// the same class of bug opcontrol's tare caused: whatever height the
+	// cascade happens to be at when auton begins would silently become 0.
 
 	//route: whichever is selected on the dashboard's Auton Select tab
 	switch (selected_auton) {

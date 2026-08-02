@@ -177,7 +177,11 @@ AutonRoutine selected_auton = AutonRoutine::left;
 DisplayTab current_tab = DisplayTab::MOTORS;
 
 const int TAB_BAR_HEIGHT = 26;
-const int TAB_WIDTH = 120;
+// 3 tabs * 160 = the full 480px width. This was 120 back when there were four
+// tabs; with SAO disabled that left a dead 120px strip on the right that looked
+// like a missing tab and swallowed taps (touch.x / TAB_WIDTH gave index 3, which
+// dashboard_handle_touch rejects).
+const int TAB_WIDTH = 160;
 const int OVERHEAT_THRESHOLD = 45;
 
 // Color palette (kept in one place so the whole UI stays visually consistent)
@@ -366,7 +370,6 @@ void dashboard_draw_motors_tab(){
   pros::ImuStatus imu_status = inertial.get_status();
   bool imu_calibrating = imu_status == pros::ImuStatus::calibrating;
   uint32_t imu_color;
-  const char* imu_text;
   if(!imu_installed || imu_status == pros::ImuStatus::error){
     imu_color = pros::c::COLOR_RED;
   } else if(imu_calibrating){
@@ -374,15 +377,31 @@ void dashboard_draw_motors_tab(){
   } else {
     imu_color = pros::c::COLOR_GREEN;
   }
-  imu_text = "IMU"; // status conveyed by the dot color, same as the L/R distance labels below
 
+  char imu_buf[16];
+  if(!imu_installed){
+    snprintf(imu_buf, sizeof(imu_buf), "IMU NA");
+  } else if(imu_calibrating){
+    snprintf(imu_buf, sizeof(imu_buf), "IMU CAL");
+  } else {
+    // The IMU's OWN heading (0-360), deliberately not chassis.get_absolute_heading()
+    // -- that one is divided by gyro_scale and already has its own line on the
+    // POSITION tab. This is the raw sensor, right next to the button that resets
+    // it: park the robot on a known heading and watch this number to decide
+    // whether it has drifted enough to need a recalibrate.
+    snprintf(imu_buf, sizeof(imu_buf), "IMU %.1f", inertial.get_heading());
+  }
+
+  // Clear stops short of the distance-L dot at (dist_l_x0 - DIST_DOT_OFFSET)
+  // below, so the two blocks don't overwrite each other. "IMU 359.9" is the
+  // widest string this can hold and ends around x=102, well inside.
   screen::set_pen(COLOR_BG);
   screen::set_eraser(COLOR_BG);
-  screen::fill_rect(30, IMU_ROW_Y, 185, IMU_ROW_Y + row_h - 2);
+  screen::fill_rect(30, IMU_ROW_Y, 122, IMU_ROW_Y + row_h - 2);
   screen::set_pen(imu_color);
   screen::fill_circle(15, IMU_ROW_Y + 8, 5);
   screen::set_pen(COLOR_TEXT);
-  screen::print(TEXT_MEDIUM, 30, IMU_ROW_Y, imu_text);
+  screen::print(TEXT_MEDIUM, 30, IMU_ROW_Y, "%s", imu_buf);
 
   // Distance sensors L/R, same row as IMU status.
   char dist_buf[16];
@@ -478,7 +497,7 @@ void dashboard_draw_position_tab(){
   screen::print(TEXT_MEDIUM, 20, 170, "%s", buf);
 }
 
-void dashboard_draw_auton_tab(){
+void dashboard_draw_auton_tab(bool clear_first){
   const char* labels[AUTON_COUNT] = {"left", "left2", "right", "right2"};
   const int label_pad = 8;
   const int radius = 10;
@@ -492,9 +511,14 @@ void dashboard_draw_auton_tab(){
     // Clear the box's full bounding area (including the shadow a selected
     // box draws) first -- an outline redraw only draws border lines, so
     // without this the old fill/shadow from a previous selection lingers.
-    screen::set_pen(COLOR_BG);
-    screen::set_eraser(COLOR_BG);
-    screen::fill_rect(x0 - 1, AUTON_BOX_Y - 1, x1 + shadow_offset + 1, AUTON_BOX_Y + AUTON_BOX_H + shadow_offset + 1);
+    // Skipped on the periodic self-heal redraw: nothing has changed there, so
+    // repainting the same pixels on top of themselves is invisible, whereas
+    // blanking to black first would show up as a visible flicker.
+    if(clear_first){
+      screen::set_pen(COLOR_BG);
+      screen::set_eraser(COLOR_BG);
+      screen::fill_rect(x0 - 1, AUTON_BOX_Y - 1, x1 + shadow_offset + 1, AUTON_BOX_Y + AUTON_BOX_H + shadow_offset + 1);
+    }
 
     if((int)selected_auton == i){
       screen::set_pen(COLOR_SHADOW);
@@ -520,9 +544,11 @@ void dashboard_draw_auton_tab(){
   int selected_line_y = AUTON_BOX_Y + AUTON_BOX_H + 25;
   // Clear this line first -- a shorter label (e.g. "right" -> "left")
   // wouldn't otherwise overwrite the previous text's trailing characters.
-  screen::set_pen(COLOR_BG);
-  screen::set_eraser(COLOR_BG);
-  screen::fill_rect(15, selected_line_y - 2, 300, selected_line_y + 18);
+  if(clear_first){
+    screen::set_pen(COLOR_BG);
+    screen::set_eraser(COLOR_BG);
+    screen::fill_rect(15, selected_line_y - 2, 300, selected_line_y + 18);
+  }
   screen::set_pen(COLOR_TEXT);
   screen::set_eraser(COLOR_BG);
   screen::print(TEXT_MEDIUM, 20, selected_line_y, "%s", buf);
@@ -643,11 +669,19 @@ void dashboard_task(){
       case DisplayTab::POSITION:
         if(live_tick) dashboard_draw_position_tab();
         break;
-      case DisplayTab::AUTON_SELECT:
-        if(tab_changed || selected_auton != prev_auton){
-          dashboard_draw_auton_tab();
+      case DisplayTab::AUTON_SELECT: {
+        // Unlike MOTORS/POSITION, this content is static, so it used to be
+        // drawn only on entry or on a selection change. That made a single
+        // lost or overwritten frame permanent: the selector stayed blank
+        // until you switched tabs and came back -- the "auton boxes sometimes
+        // don't show up" bug. The frame % 20 term repaints it every ~500ms so
+        // it heals itself, and clear_first=false keeps that repaint invisible.
+        bool auton_changed = tab_changed || selected_auton != prev_auton;
+        if(auton_changed || frame % 20 == 0){
+          dashboard_draw_auton_tab(auton_changed);
         }
         break;
+      }
       // SAO tab disabled, see sao_gallery.cpp
       // case DisplayTab::SAO:
       //   if(tab_changed || sao_index != prev_sao_index){

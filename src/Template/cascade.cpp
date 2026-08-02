@@ -3,7 +3,7 @@
 float cascade_target = 0;
 
 const float CASCADE_MIN_DEG = 0;
-float CASCADE_MAX_DEG = 3875; // was CASCADE_EXTEND_LIMIT_DEG in drive.cpp before the cascade got its own PID
+float CASCADE_MAX_DEG = 3800; // was CASCADE_EXTEND_LIMIT_DEG in drive.cpp before the cascade got its own PID
 
 // Starting point only -- these need tuning on the robot, same as ARM_KP/KI/KD.
 float CASCADE_KP = 4;
@@ -11,8 +11,8 @@ float CASCADE_KI = 0;
 float CASCADE_KD = 0;
 float CASCADE_STARTI = 0;
 
-const int CASCADE_MAX_VOLTAGE = 127;
-const int CASCADE_DOWN_MAX_VOLTAGE = 100;
+const int CASCADE_MAX_VOLTAGE = 120;
+const int CASCADE_DOWN_MAX_VOLTAGE = 197;
 
 float CASCADE_SETTLE_ERROR_DEG = 20; // was CASCADE_SETTLE_ERROR_DEG in drive.cpp
 
