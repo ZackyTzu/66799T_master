@@ -64,7 +64,8 @@ Drive chassis(
 
     // Gyro scale, this is what your gyro reads when you spin the robot 360 degrees.
     // For most cases 360 will do fine here, but this scale factor can be very helpful when precision is necessary.
-    362.5,
+    360
+    ,
 
     // If you are using position tracking, this is the Forward Tracker port (the tracker which runs parallel to the direction of the chassis).
     // If this is a rotation sensor, enter it in "PORT1" format, inputting the port below.
@@ -93,10 +94,10 @@ Drive chassis(
 void default_constants(){
     // Each constant set is in the form of (maxVoltage, kP, kI, kD, startI(, minVoltage)).
     chassis.set_drive_constants(127, 7, 0, 12.5, 0, 0);
-    chassis.set_heading_constants(64, 1.5, 0, 8, 0); //chassis.set_heading_constants(64, 0.4, 0, 20, 0);      chassis.set_heading_constants(64, 1, 0, 2, 0);
-    chassis.set_turn_constants(107, 2.85, .10583, 17.4625, 15.0); //chassis.set_turn_constants(107, 3.2, .10583, 17.4625, 15.0);
+    chassis.set_heading_constants(64, 1.65, 0, 8, 0); //chassis.set_heading_constants(64, 0.4, 0, 20, 0);      chassis.set_heading_constants(64, 1, 0, 2, 0);
+    chassis.set_turn_constants(107, 2.9, .10583, 17.4625, 15.0); //chassis.set_turn_constants(107, 3.2, .10583, 17.4625, 15.0);
     chassis.set_swing_constants(127, 3.704166667, 0.08466667, 21.1666667, 15);
-    chassis.set_wall_constants(74, 0.3, 0, 0, 0); //chassis.set_wall_constants(127, 0.529166667, 0, 0, 0);
+    chassis.set_wall_constants(74, 0.3, 0.0005, 0, 0); //chassis.set_wall_constants(127, 0.529166667, 0, 0, 0);
     
     // Each exit condition set is in the form of (settle_error, settle_time, timeout).
     chassis.set_drive_exit_conditions(1.875, 45, 3000);

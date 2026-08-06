@@ -22,7 +22,10 @@ enum class ArmPosition {
     // DOWN_HOLD -- stops a bit short of true DOWN instead of continuing all
     // the way to the hard stop. See Drive::control_arcade's A-button
     // handling in drive.cpp.
-    DOWN_HOLD_FINAL = 6
+    DOWN_HOLD_FINAL = 6,
+    // Just off the bottom hard stop (~7.5 degrees) -- not bound to a button,
+    // call arm_set_position(ArmPosition::POS_4) where you need it.
+    POS_4 = 7
 };
 
 extern ArmPosition arm_target;
@@ -38,6 +41,7 @@ extern float ARM_DOWN_DEG;
 extern float ARM_POS_1_DEG;
 extern float ARM_POS_2_DEG;
 extern float ARM_POS_3_DEG;
+extern float ARM_POS_4_DEG;
 
 // Target angle for ArmPosition::CLAW_CLEAR -- see the enum above.
 extern float ARM_CLAW_CLEAR_DEG;

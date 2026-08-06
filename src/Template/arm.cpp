@@ -19,6 +19,7 @@ float ARM_DOWN_DEG = 1;
 float ARM_POS_1_DEG = 287;
 float ARM_POS_2_DEG = 157.5;   // LEFT sequence's final position, after the cascade is back at 0
 float ARM_POS_3_DEG = 265;  // LEFT sequence's raised position, before coming back to POS_2
+float ARM_POS_4_DEG = 7.5;  // just off the bottom hard stop -- see ArmPosition::POS_4 in arm.h
 float ARM_CLAW_CLEAR_DEG = 180; // rotated to before the claw opens, if the arm was resting at POS_2 (~160) -- see Drive::control_arcade's A-button handling in drive.cpp
 float ARM_DOWN_HOLD_DEG = 28.5; // B's target instead of DOWN, if the arm was at POS_2 with the claw closed -- see Drive::control_arcade's B-button handling in drive.cpp
 float ARM_DOWN_HOLD_FINAL_DEG = 10; // where A continues to from DOWN_HOLD once the claw opens -- see Drive::control_arcade's A-button handling in drive.cpp
@@ -133,6 +134,7 @@ float arm_target_degrees(ArmPosition pos){
     case ArmPosition::POS_1: arm_deg = ARM_POS_1_DEG; break;
     case ArmPosition::POS_2: arm_deg = ARM_POS_2_DEG; break;
     case ArmPosition::POS_3: arm_deg = ARM_POS_3_DEG; break;
+    case ArmPosition::POS_4: arm_deg = ARM_POS_4_DEG; break;
     case ArmPosition::CLAW_CLEAR: arm_deg = ARM_CLAW_CLEAR_DEG; break;
     case ArmPosition::DOWN_HOLD: arm_deg = ARM_DOWN_HOLD_DEG; break;
     case ArmPosition::DOWN_HOLD_FINAL: arm_deg = ARM_DOWN_HOLD_FINAL_DEG; break;
