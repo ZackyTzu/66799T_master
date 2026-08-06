@@ -245,11 +245,14 @@ MotorInfo dashboard_motors[10] = {
 };
 
 // Auton Select box geometry, shared between drawing and touch hit-testing.
-const int AUTON_BOX_W = 100;
+// Box width/gap are sized so all AUTON_COUNT boxes fit across the 480px screen:
+// 5 * 86 + 4 * 10 = 470, leaving a 5px margin on each side. (They were 100/15
+// back when there were only four routines; that no longer fits with skill.)
+const int AUTON_BOX_W = 86;
 const int AUTON_BOX_H = 65;
 const int AUTON_BOX_Y = 45;
-const int AUTON_GAP = 15;
-const int AUTON_COUNT = 4;
+const int AUTON_GAP = 10;
+const int AUTON_COUNT = 5;
 const int AUTON_START_X = (480 - (AUTON_BOX_W * AUTON_COUNT + AUTON_GAP * (AUTON_COUNT - 1))) / 2;
 
 // The (x,y) print_at overload always treats (x,y) as the TOP-LEFT corner of
@@ -498,8 +501,7 @@ void dashboard_draw_position_tab(){
 }
 
 void dashboard_draw_auton_tab(bool clear_first){
-  const char* labels[AUTON_COUNT] = {"left", "left2", "right", "right2"};
-  const int label_pad = 8;
+  const char* labels[AUTON_COUNT] = {"left", "left2", "right", "right2", "skill"};
   const int radius = 10;
   const int shadow_offset = 3;
 
@@ -507,6 +509,10 @@ void dashboard_draw_auton_tab(bool clear_first){
     int x0 = AUTON_START_X + i * (AUTON_BOX_W + AUTON_GAP);
     int x1 = x0 + AUTON_BOX_W;
     int label_y = AUTON_BOX_Y + AUTON_BOX_H / 2 - 8;
+    // Centered rather than a fixed left pad: with the narrower boxes a 6-char
+    // label ("right2") nearly fills the box, so a fixed pad would push it off
+    // the right edge.
+    int label_x = dashboard_center_x(TEXT_MEDIUM, x0, x1, labels[i]);
 
     // Clear the box's full bounding area (including the shadow a selected
     // box draws) first -- an outline redraw only draws border lines, so
@@ -529,13 +535,13 @@ void dashboard_draw_auton_tab(bool clear_first){
       screen::set_eraser(COLOR_ACCENT);
       draw_rounded_rect_filled(x0, AUTON_BOX_Y, x1, AUTON_BOX_Y + AUTON_BOX_H, radius);
       screen::set_pen(pros::c::COLOR_WHITE);
-      screen::print(TEXT_MEDIUM, x0 + label_pad, label_y, labels[i]);
+      screen::print(TEXT_MEDIUM, label_x, label_y, labels[i]);
     } else {
       screen::set_pen(COLOR_BORDER);
       screen::set_eraser(COLOR_BG);
       draw_rounded_rect_outline(x0, AUTON_BOX_Y, x1, AUTON_BOX_Y + AUTON_BOX_H, radius);
       screen::set_pen(COLOR_TEXT);
-      screen::print(TEXT_MEDIUM, x0 + label_pad, label_y, labels[i]);
+      screen::print(TEXT_MEDIUM, label_x, label_y, labels[i]);
     }
   }
 

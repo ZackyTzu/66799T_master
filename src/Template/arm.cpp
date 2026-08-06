@@ -23,6 +23,8 @@ float ARM_POS_4_DEG = 7.5;  // just off the bottom hard stop -- see ArmPosition:
 float ARM_CLAW_CLEAR_DEG = 180; // rotated to before the claw opens, if the arm was resting at POS_2 (~160) -- see Drive::control_arcade's A-button handling in drive.cpp
 float ARM_DOWN_HOLD_DEG = 28.5; // B's target instead of DOWN, if the arm was at POS_2 with the claw closed -- see Drive::control_arcade's B-button handling in drive.cpp
 float ARM_DOWN_HOLD_FINAL_DEG = 10; // where A continues to from DOWN_HOLD once the claw opens -- see Drive::control_arcade's A-button handling in drive.cpp
+float ARM_BACK_DEG = 180;   // where arm_back() parks the arm in auton -- see arm_back() in auton-routines.cpp
+float ARM_BACK_2_DEG = 175; // where arm_back2() parks the arm in auton -- see arm_back2() in auton-routines.cpp
 
 // Soft travel limits in arm degrees. Targets are clamped here so a bad preset
 // stalls the motor against nothing instead of slamming the hard stop.
@@ -59,6 +61,11 @@ const int ARM_MAX_VOLTAGE = 97; // out of 127, clamps the PID output
 const int ARM_DOWN_MAX_VOLTAGE = 77; // out of 127, clamps output while descending so the arm goes down slower
 const int ARM_SLOW_MAX_VOLTAGE = 77; // out of 127, clamps output (either direction) while heading to CLAW_CLEAR or DOWN_HOLD, so those claw-sequence moves are gentler than a normal preset move
 
+// 0 = use the caps above. Anything else replaces all three, in both
+// directions, for as long as it's set -- see arm.h and cascade_level_0() in
+// auton-routines.cpp.
+int arm_max_voltage_override = 0;
+
 // Whenever the arm hasn't settled yet, its output is forced to at least this
 // much (in the direction of error), even if KP*error alone would be smaller.
 // Without this, a small-but-not-settled error near a target (most visibly at
@@ -78,7 +85,7 @@ float ARM_MIN_VOLTAGE = 25; // out of 127
 // Max error (arm degrees) to be considered "arrived" -- see arm_settled below.
 // The old 20 motor degrees was ~6.7 arm degrees; this is a bit tighter. Loosen
 // it if preset sequences start hitting their PRESET_STEP_TIMEOUT_MS.
-float ARM_SETTLE_ERROR_DEG = 5;
+float ARM_SETTLE_ERROR_DEG = 5.75;
 
 // True once the arm is within ARM_SETTLE_ERROR_DEG of arm_target. Lets other
 // code (e.g. Drive::control_arcade) wait for the arm to actually get there
@@ -138,6 +145,8 @@ float arm_target_degrees(ArmPosition pos){
     case ArmPosition::CLAW_CLEAR: arm_deg = ARM_CLAW_CLEAR_DEG; break;
     case ArmPosition::DOWN_HOLD: arm_deg = ARM_DOWN_HOLD_DEG; break;
     case ArmPosition::DOWN_HOLD_FINAL: arm_deg = ARM_DOWN_HOLD_FINAL_DEG; break;
+    case ArmPosition::ARM_BACK: arm_deg = ARM_BACK_DEG; break;
+    case ArmPosition::ARM_BACK_2: arm_deg = ARM_BACK_2_DEG; break;
     default:                 arm_deg = ARM_DOWN_DEG;  break;
   }
   return clamp(arm_deg, ARM_MIN_DEG, ARM_MAX_DEG);
@@ -230,6 +239,7 @@ void arm_task(){
 
     bool slow_target = (arm_target == ArmPosition::CLAW_CLEAR || arm_target == ArmPosition::DOWN_HOLD);
     int max_voltage = slow_target ? ARM_SLOW_MAX_VOLTAGE : (output < 0 ? ARM_DOWN_MAX_VOLTAGE : ARM_MAX_VOLTAGE);
+    if(arm_max_voltage_override > 0) max_voltage = arm_max_voltage_override;
     output = clamp(output, (float)-max_voltage, (float)max_voltage);
 
     arm.move(output);

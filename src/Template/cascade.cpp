@@ -14,7 +14,7 @@ float CASCADE_STARTI = 0;
 const int CASCADE_MAX_VOLTAGE = 127;
 const int CASCADE_DOWN_MAX_VOLTAGE = 107;
 
-float CASCADE_SETTLE_ERROR_DEG = 20; // was CASCADE_SETTLE_ERROR_DEG in drive.cpp
+float CASCADE_SETTLE_ERROR_DEG = 23; // was CASCADE_SETTLE_ERROR_DEG in drive.cpp
 
 bool cascade_settled = false;
 bool cascade_pid_active = false;

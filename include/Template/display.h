@@ -25,7 +25,8 @@ enum class AutonRoutine {
     left = 0,
     left2 = 1,
     right = 2,
-    right2 = 3
+    right2 = 3,
+    skill = 4
 };
 
 extern AutonRoutine selected_auton;

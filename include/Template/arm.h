@@ -25,7 +25,15 @@ enum class ArmPosition {
     DOWN_HOLD_FINAL = 6,
     // Just off the bottom hard stop (~7.5 degrees) -- not bound to a button,
     // call arm_set_position(ArmPosition::POS_4) where you need it.
-    POS_4 = 7
+    POS_4 = 7,
+    // Where arm_back() parks the arm in auton (~180 degrees), with the cascade
+    // retracted to 0. Separate from POS_2/CLAW_CLEAR so it can be tuned
+    // without moving the driver-control positions -- see arm_back() in
+    // auton-routines.cpp.
+    ARM_BACK = 8,
+    // Same idea as ARM_BACK, a bit lower (~175 degrees) -- see arm_back2() in
+    // auton-routines.cpp.
+    ARM_BACK_2 = 9
 };
 
 extern ArmPosition arm_target;
@@ -51,6 +59,12 @@ extern float ARM_DOWN_HOLD_DEG;
 
 // Target angle for ArmPosition::DOWN_HOLD_FINAL -- see the enum above.
 extern float ARM_DOWN_HOLD_FINAL_DEG;
+
+// Target angle for ArmPosition::ARM_BACK -- see the enum above.
+extern float ARM_BACK_DEG;
+
+// Target angle for ArmPosition::ARM_BACK_2 -- see the enum above.
+extern float ARM_BACK_2_DEG;
 
 // Soft travel limits in arm degrees. Every target is clamped into this range,
 // so a bad preset can't drive the arm into its hard stop at full voltage.
@@ -82,6 +96,13 @@ extern const int ARM_DOWN_MAX_VOLTAGE;
 // DOWN_HOLD, so the claw-clearance moves in Drive::control_arcade's A/B
 // handling (drive.cpp) are gentler than a normal preset move.
 extern const int ARM_SLOW_MAX_VOLTAGE;
+
+// While non-zero, replaces ALL of the caps above (ARM_MAX_VOLTAGE,
+// ARM_DOWN_MAX_VOLTAGE, ARM_SLOW_MAX_VOLTAGE) for as long as it is set, in
+// both directions. Set it around a move that needs to run faster than the
+// normal caps allow and clear it back to 0 afterwards -- see cascade_level_0()
+// in auton-routines.cpp, which runs the arm at the full 127.
+extern int arm_max_voltage_override;
 
 // Minimum output forced while unsettled, to break static friction. If this
 // is too high it overpowers KP near the settle boundary and causes a

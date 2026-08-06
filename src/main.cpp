@@ -44,6 +44,8 @@ void initialize() {
 	vexdash::watch_config("POS_2", &ARM_POS_2_DEG, "arm/presets");
 	vexdash::watch_config("POS_3", &ARM_POS_3_DEG, "arm/presets");
 	vexdash::watch_config("POS_4", &ARM_POS_4_DEG, "arm/presets");
+	vexdash::watch_config("ARM_BACK", &ARM_BACK_DEG, "arm/presets");
+	vexdash::watch_config("ARM_BACK_2", &ARM_BACK_2_DEG, "arm/presets");
 	vexdash::watch_config("kP",    &ARM_KP,        "arm/pid");
 	vexdash::watch_config("kI",    &ARM_KI,        "arm/pid");
 	vexdash::watch_config("kD",    &ARM_KD,        "arm/pid");
@@ -135,6 +137,9 @@ void autonomous() {
 			break;
 		case AutonRoutine::right2:
 			right2();
+			break;
+		case AutonRoutine::skill:
+			skill();
 			break;
 	}
 }

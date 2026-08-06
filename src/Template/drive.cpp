@@ -1134,7 +1134,14 @@ void Drive::control_arcade(){
       // inside start_y_sequence, which RIGHT shares and whose latch has to
       // survive) is what stops a request left over from RIGHT firing the
       // solenoid the moment this sequence lifts the arm past ARM_DOWN_HOLD_DEG.
+      // Y also forces `toggle` ON, same as DOWN does, regardless of where
+      // RIGHT/DOWN left it. Written to the solenoids here as well as to the
+      // state, so the press lands on this tick instead of the next pass
+      // through the set_value() pair above.
       op_toggle_state = false;
+      toggle_state = true;
+      toggle.set_value(true);
+      op_toggle.set_value(false);
       start_y_sequence(); // defined above control_arcade's loop; RIGHT's first press runs it too
     }
     last_bt_y = bt_y;
