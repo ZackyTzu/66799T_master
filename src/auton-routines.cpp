@@ -77,8 +77,53 @@ score(ScoringLevel::LEVEL_4, ArmPosition::DOWN_HOLD, 200);
 return 0;
 }
 
+// How long to keep waiting for the arm to physically reach DOWN after score()
+// returns, before giving up and restoring the normal caps anyway.
+const int LEVEL_1_ARM_DOWN_TIMEOUT_MS = 3000;
+
+// Same override trick as cascade_level_0(), at 117 instead of 127 -- the arm
+// drops to DOWN faster than ARM_DOWN_MAX_VOLTAGE (77) would allow.
+//
+// score() alone is NOT enough to hold the override for the whole descent.
+// arm_set_position() doesn't clear arm_settled (see arm.cpp), so it's stale
+// true for the previous target for the first few 10ms arm_task() loops, and
+// score()'s wait sails past its arm half immediately. LEVEL_1 is only a 300
+// degree cascade move, so score() then returns in about half a second -- long
+// before the arm has fallen from POS_1 -- and clearing the override there
+// would drop the rest of the descent back to 77. So wait on the measured
+// angle, not on arm_settled, before restoring the caps.
 int cascade_level_1(){
+arm_max_voltage_override = 117;
 score(ScoringLevel::LEVEL_1, ArmPosition::DOWN);
+
+int waited_ms = 0;
+while(fabs(arm_get_position_deg() - arm_target_degrees(ArmPosition::DOWN)) > ARM_SETTLE_ERROR_DEG){
+  delay(10);
+  waited_ms += 10;
+  if(waited_ms > LEVEL_1_ARM_DOWN_TIMEOUT_MS) break;
+}
+
+arm_max_voltage_override = 0;
+return 0;
+}
+
+// Rotates ONLY the arm down to 0 (ArmPosition::DOWN) at 125, leaving the
+// cascade wherever it is -- unlike cascade_level_0(), which drives both.
+// Waits on the measured angle rather than arm_settled, for the same stale-flag
+// reason as cascade_level_1() above, then restores the normal caps. Start it
+// as a Task to overlap it with driving; call it directly to block.
+int arm_down_fast(){
+arm_max_voltage_override = 125;
+arm_set_position(ArmPosition::DOWN);
+
+int waited_ms = 0;
+while(fabs(arm_get_position_deg() - arm_target_degrees(ArmPosition::DOWN)) > ARM_SETTLE_ERROR_DEG){
+  delay(10);
+  waited_ms += 10;
+  if(waited_ms > LEVEL_1_ARM_DOWN_TIMEOUT_MS) break;
+}
+
+arm_max_voltage_override = 0;
 return 0;
 }
 
@@ -92,14 +137,15 @@ score(ScoringLevel::LEVEL_0, ArmPosition::ARM_BACK_2);
 return 0;
 }
 
-
 void left(){
 default_constants();
 toggle.set_value(true);
-chassis.drive_with_voltage(-57,-57);
+delay(150);
+chassis.drive_with_voltage(-47,-47);
 delay(450);
+Task arm_down_task = Task(arm_down_fast);
 Task level_1_task = Task(cascade_level_1);
-chassis.drive_distance(16.5,false);
+chassis.drive_distance(15.5,false);
 chassis.turn_to_angle(71.5);
 chassis.drive_distance(9.75);
 score(ScoringLevel::LEVEL_0, ArmPosition::DOWN);
@@ -110,16 +156,25 @@ chassis.drive_distance(-5);
 Task level_0_task = Task(cascade_level_0);
 chassis.turn_to_angle(124.5);
 chassis.drive_max_voltage = 107;
-chassis.drive_distance(14.25);
-chassis.turn_to_angle(140.75,true);
-chassis.drive_max_voltage = 107;
-chassis.drive_timeout = 600;
-chassis.drive_settle_error = 2;
-chassis.drive_distance(5.25);
-chassis.turn_to_angle(149.5);
+chassis.drive_distance(14);
+chassis.swing_max_voltage = 90;
+chassis.drive_timeout = 1000;
+chassis.swing_to_angle(149.5,true,false);
 chassis.drive_timeout = 300;
-chassis.drive_distance(2.5);
+chassis.drive_distance(1);
 claw.set_value(true);
+delay(50);
+
+
+// chassis.turn_to_angle(140.75,true);
+// chassis.drive_max_voltage = 107;
+// chassis.drive_timeout = 600;
+// chassis.drive_settle_error = 2;
+// chassis.drive_distance(5.25);
+// chassis.turn_to_angle(149.5);
+// chassis.drive_timeout = 300;
+// chassis.drive_distance(2.5);
+// claw.set_value(true);
 
 default_constants();
 chassis.drive_max_voltage = 127;
@@ -133,11 +188,12 @@ Task claw_task = Task(wait_claw_open);
 Task cascade1_task = Task(cascade_level_opt);
 delay(300);
 chassis.drive_distance(-5);
-chassis.turn_to_angle(82.5);
-chassis.drive_settle_error = 6;
-chassis.drive_settle_time = 20;
-chassis.drive_timeout = 550;
-chassis.wall_distance(Drive::WallSide::RIGHT, -30, 79, 405, 40);
+chassis.turn_to_angle(87.5);
+chassis.drive_distance(-30,80,false);
+// chassis.drive_settle_error = 6;
+// chassis.drive_settle_time = 20;
+// chassis.drive_timeout = 550;
+// chassis.wall_distance(Drive::WallSide::RIGHT, -30, 79, 405, 40);
 Task cascade0_task = Task(cascade_level_0);
 
 default_constants();
@@ -149,15 +205,22 @@ chassis.drive_distance(7);
 chassis.turn_to_angle(205);
 
 default_constants();
-chassis.drive_distance(15.5);
-chassis.turn_to_angle(194,true);
-chassis.drive_timeout = 600;
-chassis.drive_settle_error = 2;
-chassis.drive_distance(5.5);
-chassis.turn_to_angle(181);
-chassis.drive_timeout = 300;
-chassis.drive_distance(2.5);
+chassis.drive_distance(15);
+chassis.swing_max_voltage = 90;
+chassis.swing_timeout = 1000;
+chassis.swing_to_angle(181,false,false);
+chassis.drive_timeout = 500;
+chassis.drive_distance(3);
 claw.set_value(true);
+delay(50);
+// chassis.turn_to_angle(194,true);
+// chassis.drive_timeout = 600;
+// chassis.drive_settle_error = 2;
+// chassis.drive_distance(5.5);
+// chassis.turn_to_angle(181);
+// chassis.drive_timeout = 300;
+// chassis.drive_distance(2.5);
+// claw.set_value(true);
 
 default_constants();
 chassis.drive_max_voltage = 127;
@@ -167,10 +230,10 @@ chassis.turn_to_angle(205);
 chassis.drive_distance(-14.75);
 Task level_3_task2 = Task(cascade_level_3_lift_arm);
 chassis.turn_to_angle(264.5);
-chassis.drive_timeout = 500;
-chassis.drive_distance(7);
+chassis.drive_timeout = 750;
+chassis.drive_distance(8.5);
 Task claw_task2 = Task(wait_claw_open2);
-Task level_3_task3 = Task(cascade_level_3_lift);
+Task level_3_task3 = Task(cascade_level_2_lift);
 chassis.drive_distance(-2);
 chassis.drive_stop(MotorBrake::brake);
 }
@@ -178,24 +241,37 @@ chassis.drive_stop(MotorBrake::brake);
 void left2(){
 default_constants();
 toggle.set_value(true);
-chassis.drive_with_voltage(-57,-57);
+delay(150);
+chassis.drive_with_voltage(-44,-44);
 delay(450);
+Task arm_down_task = Task(arm_down_fast);
 Task level_1_task = Task(cascade_level_1);
-chassis.drive_distance(16.5,false);
+chassis.drive_distance(15.5,false);
 chassis.turn_to_angle(71.5);
 chassis.drive_distance(9.75);
 score(ScoringLevel::LEVEL_0, ArmPosition::DOWN);
 delay(100);
+// toggle.set_value(true);
+// // Task cascade0_task = Task(cascade_level_0);
+// chassis.drive_with_voltage(-57,-57);
+// delay(450);
+// Task level_1_task = Task(cascade_level_1);
+// chassis.drive_distance(16.5,false);
+// chassis.turn_to_angle(72);
+// chassis.drive_distance(11.5);
+// score(ScoringLevel::LEVEL_0, ArmPosition::DOWN);
+// delay(100);
 claw.set_value(false);
 delay(100);
 chassis.drive_distance(-6.75);
-chassis.turn_to_angle(13.5);
+chassis.turn_to_angle(14.15);
 chassis.drive_max_voltage = 127;
 chassis.drive_distance(19);
 chassis.drive_max_voltage = 20;
 chassis.drive_distance(6.85);
-delay(150);
+delay(50);
 claw.set_value(true);
+delay(50);
 
 default_constants();
 Task level_2_task = Task(cascade_level_2_lift);
@@ -203,78 +279,85 @@ default_constants();
 chassis.drive_distance(-1);
 chassis.turn_max_voltage = 70;
 chassis.turn_to_angle(154);
-chassis.drive_distance(10.25);
+chassis.drive_distance(10.85);
 Task claw_task = Task(wait_claw_open);
 Task cascade1_task = Task(cascade_level_opt);
-delay(500);
+delay(350);
 
 default_constants();
-chassis.drive_distance(-10.5);
-Task cascade0_task = Task(cascade_level_0);
+chassis.drive_distance(-10.85);
+Task cascade0_task2 = Task(cascade_level_0);
 chassis.turn_to_angle(107.5);
 chassis.drive_distance(24);
 chassis.drive_max_voltage = 20;
-chassis.drive_distance(6);
+chassis.drive_distance(6.25);
 delay(100);
 claw.set_value(true);
 delay(150);
 arm_set_position(ArmPosition::DOWN_HOLD);
 Task level_tpf_task = Task(cascade_level_tpf);
 chassis.turn_max_voltage = 67;
-chassis.turn_to_angle(247);
+chassis.turn_to_angle(246.5);
 
 default_constants();
-chassis.drive_max_voltage = 107;
-chassis.drive_distance(12.25);
+chassis.drive_max_voltage = 97;
+chassis.drive_distance(12);
 delay(250);
 arm_set_position(ArmPosition::DOWN);
 Task claw_task2 = Task(wait_claw_open);
 Task level_2_task2 = Task(cascade_level_2_lift);
-delay(1000);
-chassis.drive_distance(-5);
-chassis.drive_stop(MotorBrake::brake);
-// delay(600);
+// delay(1000);
+// chassis.drive_distance(-5);
+// chassis.drive_stop(MotorBrake::brake);
+delay(550);
 
-// default_constants();
-// Task cascade0_task3 = Task(cascade_level_0);
-// chassis.drive_distance(-7);
-// arm_set_position(ArmPosition::DOWN);
-// chassis.turn_to_angle(201.5);
-// chassis.drive_distance(19);
+default_constants();
+Task cascade0_task3 = Task(cascade_level_0);
+chassis.drive_distance(-7.75);
+arm_set_position(ArmPosition::DOWN);
+chassis.turn_to_angle(200.5);
+chassis.drive_distance(17);
+chassis.swing_max_voltage = 90;
+chassis.swing_timeout = 1250;
+chassis.swing_to_angle(176,false,false);
+chassis.drive_timeout = 350;
+chassis.drive_distance(2);
 // chassis.turn_to_angle(19,true);
 // chassis.drive_max_voltage = 77;
 // chassis.drive_timeout = 450;
 // chassis.drive_distance(4.75);
 // chassis.turn_to_angle(178);
-// delay(150);
-// claw.set_value(true);
+delay(150);
+claw.set_value(true);
 
-// default_constants();
-// chassis.drive_max_voltage = 117;
-// chassis.drive_distance(-1);
-// Task level_4_task = Task(cascade_level_4);
-// chassis.turn_to_angle(208);
-// chassis.drive_distance(-20);
-// chassis.turn_max_voltage = 67;
-// chassis.turn_to_angle(252.25);
-// chassis.drive_max_voltage = 117;
-// chassis.drive_distance(6.85);
-// delay(100);
-// arm_set_position(ArmPosition::DOWN);
-// delay(100);
-// claw.set_value(false);
-// chassis.drive_max_voltage = 37;
-// chassis.drive_distance(3);
-// chassis.drive_stop(MotorBrake::brake);
+default_constants();
+chassis.drive_max_voltage = 117;
+chassis.drive_distance(-1);
+Task level_4_task = Task(cascade_level_4);
+chassis.turn_to_angle(208);
+chassis.drive_distance(-19.5);
+chassis.turn_max_voltage = 67;
+chassis.turn_to_angle(252.25);
+chassis.drive_max_voltage = 117;
+chassis.drive_distance(6);
+delay(100);
+arm_set_position(ArmPosition::DOWN);
+delay(100);
+claw.set_value(false);
+chassis.drive_max_voltage = 37;
+chassis.drive_distance(-3);
+chassis.drive_stop(MotorBrake::brake);
 }
 
 void right(){
 default_constants();
 toggle.set_value(true);
-chassis.drive_with_voltage(-57,-57);
+delay(150);
+chassis.drive_with_voltage(-44,-44);
 delay(450);
+Task arm_down_task = Task(arm_down_fast);
 Task level_1_task = Task(cascade_level_1);
-chassis.drive_distance(15,false);
+chassis.drive_distance(15.5,false);
 chassis.turn_to_angle(288);
 chassis.drive_distance(11.65);
 score(ScoringLevel::LEVEL_0, ArmPosition::DOWN);
@@ -282,17 +365,17 @@ delay(100);
 claw.set_value(false);
 delay(100);
 chassis.drive_distance(-6);
-chassis.turn_to_angle(235);
+chassis.turn_to_angle(236);
 chassis.drive_max_voltage = 107;
-chassis.drive_distance(15.5);
-chassis.turn_to_angle(220,true);
+chassis.drive_distance(16);
+chassis.turn_to_angle(221.5,true);
 chassis.drive_max_voltage = 107;
-chassis.drive_timeout = 600;
+chassis.drive_timeout = 700;
 chassis.drive_settle_error = 2;
-chassis.drive_distance(5.25);
-chassis.turn_to_angle(209);
+chassis.drive_distance(5.45);
+chassis.turn_to_angle(210);
 chassis.drive_timeout = 400;
-chassis.drive_distance(3);
+chassis.drive_distance(3.5);
 claw.set_value(true);
 
 default_constants();
@@ -302,17 +385,18 @@ Task level_2_task = Task(cascade_level_2_lift);
 chassis.turn_to_angle(255);
 chassis.drive_distance(-12);
 chassis.turn_to_angle(306.75);
-chassis.drive_distance(8.85);
+chassis.drive_distance(8.65);
 Task claw_task = Task(wait_claw_open);
 Task cascade1_task = Task(cascade_level_opt);
 delay(300);
 chassis.drive_distance(-5);
-chassis.turn_to_angle(277.5);
+chassis.turn_to_angle(276.75);
 Task cascade0_task = Task(cascade_level_0);
-chassis.drive_settle_error = 6.5;
-chassis.drive_settle_time = 20;
-chassis.drive_timeout = 550;
-chassis.wall_distance(Drive::WallSide::LEFT, -30, 281, 405, 50);
+chassis.drive_distance(-30,282);
+// chassis.drive_settle_error = 6.5;
+// chassis.drive_settle_time = 20;
+// chassis.drive_timeout = 550;
+// chassis.wall_distance(Drive::WallSide::LEFT, -30, 281, 405, 50);
 
 default_constants();
 chassis.drive_with_voltage(-40,-40);
@@ -324,7 +408,7 @@ chassis.turn_to_angle(151);
 
 default_constants();
 chassis.drive_distance(17);
-chassis.turn_to_angle(164.5,true);
+chassis.turn_to_angle(165.5,true);
 chassis.drive_timeout = 700;
 chassis.drive_settle_error = 2;
 chassis.drive_distance(5.25);
@@ -352,10 +436,12 @@ chassis.drive_stop(MotorBrake::brake);
 void right2(){
 default_constants();
 toggle.set_value(true);
-chassis.drive_with_voltage(-57,-57);
+delay(150);
+chassis.drive_with_voltage(-44,-44);
 delay(450);
+Task arm_down_task = Task(arm_down_fast);
 Task level_1_task = Task(cascade_level_1);
-chassis.drive_distance(15,false);
+chassis.drive_distance(15.5,false);
 chassis.turn_to_angle(288);
 chassis.drive_distance(11.65);
 score(ScoringLevel::LEVEL_0, ArmPosition::DOWN);
@@ -405,6 +491,12 @@ Task claw_task2 = Task(wait_claw_open);
 Task level_2_task2 = Task(cascade_level_2_lift);
 delay(1000);
 chassis.drive_distance(-5);
+chassis.turn_to_angle(16);
+chassis.drive_with_voltage(-57,-57);
+delay(1000);
+chassis.drive_distance(2.5);
+chassis.turn_to_angle(104);
+
 chassis.drive_stop(MotorBrake::brake);
 // delay(600);
 
@@ -446,7 +538,7 @@ toggle.set_value(true);
 chassis.drive_with_voltage(-57,-57);
 delay(450);
 Task level_1_task = Task(cascade_level_1);
-chassis.drive_distance(16.5,false);
+chassis.drive_distance(16.185,false);
 chassis.turn_to_angle(71.5);
 chassis.drive_distance(9.75);
 score(ScoringLevel::LEVEL_0, ArmPosition::DOWN);
@@ -464,7 +556,7 @@ delay(100);
 claw.set_value(false);
 delay(100);
 chassis.drive_distance(-6.75);
-chassis.turn_to_angle(13.5);
+chassis.turn_to_angle(14.15);
 chassis.drive_max_voltage = 127;
 chassis.drive_distance(19);
 chassis.drive_max_voltage = 20;
@@ -478,7 +570,7 @@ default_constants();
 chassis.drive_distance(-1);
 chassis.turn_max_voltage = 70;
 chassis.turn_to_angle(154);
-chassis.drive_distance(10.5);
+chassis.drive_distance(10);
 Task claw_task = Task(wait_claw_open);
 Task cascade1_task = Task(cascade_level_opt);
 delay(500);
@@ -489,7 +581,7 @@ Task cascade0_task2 = Task(cascade_level_0);
 chassis.turn_to_angle(107.5);
 chassis.drive_distance(24);
 chassis.drive_max_voltage = 20;
-chassis.drive_distance(6);
+chassis.drive_distance(6.35);
 delay(100);
 claw.set_value(true);
 delay(150);
@@ -544,14 +636,15 @@ claw.set_value(true);
 chassis.drive_max_voltage = 97;
 Task level_1_task3 = Task(cascade_level_1);
 chassis.drive_distance(-13);
-chassis.turn_to_angle(113.5);
+chassis.turn_to_angle(114);
 Task arm_back_task = Task(arm_back2);
 chassis.drive_distance(-60);
 chassis.drive_with_voltage(-27,-27);
-delay(1000);
+delay(1750);
 chassis.drive_stop(MotorBrake::brake);
-delay(500);
+delay(1250);
 claw.set_value(false);
+delay(500);
 chassis.turn_to_angle(113.5);
 Task cascade0_task5 = Task(cascade_level_0);
 chassis.drive_distance(65);
@@ -570,13 +663,13 @@ claw.set_value(true);
 chassis.drive_max_voltage = 97;
 Task level_1_task4 = Task(cascade_level_1);
 chassis.drive_distance(-13);
-chassis.turn_to_angle(113.5);
+chassis.turn_to_angle(114);
 Task arm_back_task3 = Task(arm_back);
 chassis.drive_distance(-60);
 chassis.drive_with_voltage(-27,-27);
-delay(1000);
+delay(1500);
 chassis.drive_stop(MotorBrake::brake);
-delay(500);
+delay(1000);
 claw.set_value(false);
 
 }

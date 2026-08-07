@@ -43,8 +43,9 @@ extern ArmPosition arm_target;
 // involved anymore -- the sensor sits on the arm shaft, so what it reads IS
 // the arm angle.
 //
-// ARM_DOWN_DEG is 0: arm_task() zeroes the sensor at program start, so 0 is
-// wherever the arm is resting when the program boots.
+// Nothing zeroes the sensor at program start and there is no homing routine,
+// so these are read straight off arm_rotation's existing zero -- see the note
+// above ARM_DOWN_DEG in arm.cpp.
 extern float ARM_DOWN_DEG;
 extern float ARM_POS_1_DEG;
 extern float ARM_POS_2_DEG;
@@ -120,6 +121,8 @@ extern bool arm_settled;
 // True while arm_rotation is not reporting a valid position (unplugged or
 // failed). The arm is held at 0 V for as long as this is set.
 extern bool arm_sensor_ok;
+
+extern float arm_level_1_rotate;
 
 // --- vexdash live telemetry (streamed to the web dashboard) ---
 extern float tele_arm_angle;   // current arm angle (deg)

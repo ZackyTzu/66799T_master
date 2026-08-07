@@ -108,7 +108,7 @@ void disabled() {
 
 void competition_initialize() {
 	init();
-	toggle.set_value(true);
+	toggle.set_value(false);
 	claw.set_value(true);
 	delay(2250);
 	inertial.tare_euler(); // idk the difference between this and inertial.tare(). Both works. Does not work if called in competition_initialize() or disabled() for some reason.

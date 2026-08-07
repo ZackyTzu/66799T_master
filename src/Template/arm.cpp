@@ -5,16 +5,17 @@ ArmPosition arm_target = ArmPosition::DOWN;
 // Target angles in ARM degrees, straight from arm_rotation (port 21).
 //
 // To re-measure any of these:
-//   1. Build and run, then press any arm button once so it homes (see
-//      arm_task()) -- 0 becomes the arm's real bottom hard stop, not
-//      wherever it happened to be sitting when the program started.
-//   2. Move the arm by hand (or with the buttons) to the position you want.
-//   3. Read "arm_angle" on the vexdash Graph panel and put that number here.
+//   1. Move the arm by hand (or with the buttons) to the position you want.
+//   2. Read "arm_angle" on the vexdash Graph panel and put that number here.
 // Or drag ARM_*_DEG on the dashboard Config panel and watch the arm move --
 // the values write back live, so you can find them without rebuilding.
 //
-// DOWN is 0, and 0 is a FIXED physical position -- the arm's bottom hard
-// stop -- not "wherever the arm was at boot".
+// There is no homing routine anymore -- the arm never drives itself to the
+// hard stop before a move. arm_rotation is on the arm shaft and reads an
+// absolute angle, so these numbers mean whatever that sensor's zero means.
+// If the presets ever look uniformly offset, the sensor's zero has moved:
+// park the arm on its bottom hard stop and reset the Rotation sensor once
+// (arm_rotation.reset_position()), and every preset lines up again.
 float ARM_DOWN_DEG = 1;
 float ARM_POS_1_DEG = 287;
 float ARM_POS_2_DEG = 157.5;   // LEFT sequence's final position, after the cascade is back at 0
@@ -25,7 +26,7 @@ float ARM_DOWN_HOLD_DEG = 28.5; // B's target instead of DOWN, if the arm was at
 float ARM_DOWN_HOLD_FINAL_DEG = 10; // where A continues to from DOWN_HOLD once the claw opens -- see Drive::control_arcade's A-button handling in drive.cpp
 float ARM_BACK_DEG = 180;   // where arm_back() parks the arm in auton -- see arm_back() in auton-routines.cpp
 float ARM_BACK_2_DEG = 175; // where arm_back2() parks the arm in auton -- see arm_back2() in auton-routines.cpp
-
+float arm_level_1_rotate = 2.5;
 // Soft travel limits in arm degrees. Targets are clamped here so a bad preset
 // stalls the motor against nothing instead of slamming the hard stop.
 // Set ARM_MAX_DEG to the arm's real measured travel.
@@ -94,12 +95,11 @@ bool arm_settled = false;
 
 bool arm_sensor_ok = false;
 
-// True once the arm has driven down and found its real physical zero (see
-// arm_task()'s homing step). Nothing drives the arm until this is true, so
-// the arm never moves on its own just because the program started -- it only
-// homes the first time a button actually asks the arm to go somewhere.
-bool arm_homed = false;
-static bool arm_home_requested = false;
+// True once something has actually asked the arm to go somewhere. Nothing
+// drives the arm until then, so it never moves on its own just because the
+// program started -- it holds wherever it's sitting until the first
+// arm_set_position() call.
+static bool arm_move_requested = false;
 
 float tele_arm_angle = 0;
 float tele_arm_target = 0;
@@ -111,16 +111,25 @@ float tele_arm_output = 0;
 static float arm_last_good_deg = 0;
 
 void arm_set_position(ArmPosition pos){
-  // Whichever button/routine asks the arm to go somewhere first is what
-  // triggers homing -- not the program starting. See arm_task().
-  if(!arm_homed){
-    arm_home_requested = true;
-  }
+  arm_move_requested = true;
   arm_target = pos;
 }
 
 // Rotation::get_position() returns centidegrees, and PROS_ERR when the sensor
 // isn't reporting. Updates arm_sensor_ok as a side effect.
+//
+// The reading is wrap-folded before it's returned. The sensor's zero doesn't
+// exactly match the arm's physical bottom, so an arm resting a few degrees
+// BELOW zero comes back as 357-ish instead of -3, and the PID then sees a
+// -356 error and drives the arm hard the wrong way, into the hard stop,
+// forever. Anything above ARM_WRAP_FOLD_DEG is therefore read as a small
+// negative angle instead.
+//
+// Note this is NOT the usual "wrap error into +/-180" trick -- that would
+// break this arm, whose travel (0 to ARM_MAX_DEG, 287) is wider than 180: a
+// legitimate 0 -> 287 move would fold to -73 and send the arm down instead of
+// up. Folding the POSITION just above the top of travel is unambiguous,
+// because a real arm angle can never land between ARM_MAX_DEG and 360.
 float arm_get_position_deg(){
   std::int32_t centideg = arm_rotation.get_position();
 
@@ -129,8 +138,16 @@ float arm_get_position_deg(){
     return arm_last_good_deg;
   }
 
+  float deg = centideg / 100.0;
+
+  // Midpoint of the dead zone between the top of travel and a full turn, so
+  // there's equal slack for the arm overshooting ARM_MAX_DEG and for the
+  // sensor's zero sitting below the physical bottom.
+  float wrap_fold_deg = (ARM_MAX_DEG + 360.0) / 2.0;
+  if(deg > wrap_fold_deg) deg -= 360.0;
+
   arm_sensor_ok = true;
-  arm_last_good_deg = centideg / 100.0;
+  arm_last_good_deg = deg;
   return arm_last_good_deg;
 }
 
@@ -152,12 +169,6 @@ float arm_target_degrees(ArmPosition pos){
   return clamp(arm_deg, ARM_MIN_DEG, ARM_MAX_DEG);
 }
 
-// Homing voltage/timing for arm_task()'s startup homing routine below.
-const int ARM_HOME_VOLTAGE = -40;     // out of 127, negative = descending
-const int ARM_HOME_STALL_RPM = 2;     // |velocity| below this counts as "not moving"
-const int ARM_HOME_STALL_MS = 200;    // how long it must stay stalled to count as "hit the hard stop"
-const int ARM_HOME_TIMEOUT_MS = 2000; // give up and zero wherever it ends up, so a jam can't hang boot forever
-
 void arm_task(){
   // Default brake mode is COAST, which would let the arm sag under gravity
   // between PID updates instead of holding position.
@@ -167,44 +178,21 @@ void arm_task(){
   arm_rotation.set_data_rate(5); // ms, so the 10ms loop always has a fresh sample
 
   // The motor encoder no longer drives the PID, but the MOTORS tab of the V5
-  // dashboard shows it, so keep it zeroed at the same moment as arm_rotation
-  // (inside the homing step below).
+  // dashboard shows it, so start it from a known value.
   arm.tare_position();
 
   PID armPID(0, ARM_KP, ARM_KI, ARM_KD, ARM_STARTI);
 
   while(true){
-    // Nothing below here drives the arm until it's been homed at least once
-    // -- that's what keeps the arm from moving on its own just because the
-    // program started. arm_set_position() sets arm_home_requested the first
-    // time ANY position (DOWN, POS_1, ...) is actually asked for, so whatever
-    // button is pressed first triggers this.
+    // There is no startup homing step. arm_rotation sits on the arm shaft and
+    // reads an absolute angle, so the arm's position is already known at boot
+    // no matter where it's parked -- nothing has to drive it to the hard stop
+    // to find out. 0 is whatever arm_rotation is zeroed to; see the note on
+    // ARM_DOWN_DEG at the top of this file.
     //
-    // The arm can start at any angle -- however it happened to be sitting
-    // when the program booted -- so just taring the sensor at boot (the old
-    // approach) would make "0" mean "wherever it randomly was," not the real
-    // hard stop. That's why DOWN did nothing the first time it was pressed:
-    // target and position were both "0" already, by definition, with zero
-    // error. Driving down at a fixed voltage until the arm actually stalls
-    // against its hard stop, THEN zeroing, anchors 0 to a real position no
-    // matter where the arm started.
-    if(arm_home_requested){
-      arm.move(ARM_HOME_VOLTAGE);
-      int stalled_ms = 0;
-      int homing_ms = 0;
-      while(stalled_ms < ARM_HOME_STALL_MS && homing_ms < ARM_HOME_TIMEOUT_MS){
-        delay(10);
-        homing_ms += 10;
-        stalled_ms = (fabs(arm.get_actual_velocity()) < ARM_HOME_STALL_RPM) ? stalled_ms + 10 : 0;
-      }
-      arm.move(0);
-      arm_rotation.reset_position(); // the true hard stop, just reached above, becomes 0
-      arm.tare_position();
-      arm_home_requested = false;
-      arm_homed = true;
-    }
-
-    if(!arm_homed){
+    // Nothing drives the arm until something actually asks for a position, so
+    // it still won't move on its own just because the program started.
+    if(!arm_move_requested){
       arm.move(0);
       tele_arm_output = 0;
       arm_settled = false;
