@@ -2,6 +2,13 @@
 #include "main.h"
 using namespace pros;
 
+// Settle bands used only by X's y_engaged preset sequence in drive.cpp, which
+// hands off between its four moves sooner than the tight global settle allows.
+// Defined and documented next to that sequence's other constants in drive.cpp;
+// declared here so main.cpp can put them on the dashboard.
+extern float X_SEQ_ARM_SETTLE_ERROR;     // arm degrees
+extern float X_SEQ_CASCADE_SETTLE_ERROR; // cascade degrees
+
 class Drive{
     private: 
         float wheel_diameter;

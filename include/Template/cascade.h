@@ -25,10 +25,20 @@ extern float CASCADE_STARTI; // max error (cascade degrees) before the I term st
 extern const int CASCADE_MAX_VOLTAGE;      // out of 127, clamps the PID output while raising
 extern const int CASCADE_DOWN_MAX_VOLTAGE; // out of 127, clamps output while lowering, so it descends gently
 
-// Max error (cascade degrees) to be considered "arrived" -- see cascade_settled.
-extern float CASCADE_SETTLE_ERROR_DEG;
+// Settling is handed to the cascade's PID (see PID.h), same as the arm: the
+// cascade counts as arrived once |error| has stayed under CASCADE_SETTLE_ERROR
+// for CASCADE_SETTLE_TIME_MS straight. Both are live-tunable on the dashboard
+// ("cascade/settle").
+//
+// CASCADE_SETTLE_TIME_MS = 0 is the old instantaneous behaviour. Raise it only
+// as far as needed -- it is latency on every wait. See ARM_SETTLE_TIME_MS.
+extern float CASCADE_SETTLE_ERROR;   // cascade degrees
+extern float CASCADE_SETTLE_TIME_MS;
 
-// True once the cascade is within CASCADE_SETTLE_ERROR_DEG of cascade_target.
+// True once the cascade has settled on cascade_target. Cleared synchronously by
+// cascade_set_target() and never left stale-true for a superseded target -- see
+// arm_settled in arm.h. Forced false while the driver has manual control, since
+// the PID isn't the one positioning the cascade then.
 extern bool cascade_settled;
 
 // True while the background PID task should be driving cascade1/cascade2.

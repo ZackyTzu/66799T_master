@@ -50,6 +50,11 @@
 #include "Template/pure-pursuit/custom-math.h"
 #include "Template/drive.h"
 #include "Template/arm.h"
+// Was never included anywhere, so cascade.cpp's globals -- CASCADE_SETTLE_ERROR
+// among them -- couldn't be seen or shared by the code that actually moves the
+// cascade. Note this only publishes the declarations: start_cascade_task() is
+// still not called, so the cascade PID itself remains off.
+#include "Template/cascade.h"
 #include "Template/pure-pursuit/parse-point-data.h"
 #include "intake.h"
 

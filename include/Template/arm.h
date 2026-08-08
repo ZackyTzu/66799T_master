@@ -33,7 +33,12 @@ enum class ArmPosition {
     ARM_BACK = 8,
     // Same idea as ARM_BACK, a bit lower (~175 degrees) -- see arm_back2() in
     // auton-routines.cpp.
-    ARM_BACK_2 = 9
+    ARM_BACK_2 = 9,
+    // Tucked down to the height where a raised arm stops fouling other
+    // components (~260 degrees). Y rotates here first when it's pressed high
+    // and the cascade still up, then continues to POS_1 once the cascade has
+    // come down -- see Drive::control_arcade's Y sequence in drive.cpp.
+    CASCADE_CLEAR = 10
 };
 
 extern ArmPosition arm_target;
@@ -66,6 +71,9 @@ extern float ARM_BACK_DEG;
 
 // Target angle for ArmPosition::ARM_BACK_2 -- see the enum above.
 extern float ARM_BACK_2_DEG;
+
+// Target angle for ArmPosition::CASCADE_CLEAR -- see the enum above.
+extern float ARM_CASCADE_CLEAR_DEG;
 
 // Soft travel limits in arm degrees. Every target is clamped into this range,
 // so a bad preset can't drive the arm into its hard stop at full voltage.
@@ -110,12 +118,26 @@ extern int arm_max_voltage_override;
 // bang-bang oscillation right as the arm nears its target -- see arm.cpp.
 extern float ARM_MIN_VOLTAGE;
 
-// Max error (arm degrees) to be considered "arrived".
-extern float ARM_SETTLE_ERROR_DEG;
+// Settling is handed to the arm's PID (see PID.h) instead of being checked by
+// hand, so the arm settles the same way the drive does: it counts as arrived
+// once |error| has stayed under ARM_SETTLE_ERROR for ARM_SETTLE_TIME_MS
+// straight. Both are live-tunable on the dashboard ("arm/settle").
+//
+// ARM_SETTLE_TIME_MS = 0 means "settled the first loop error dips into the
+// band", which is what the arm used to do. Raise it only far enough to stop a
+// fast move reporting settled while it's still swinging through the band --
+// every millisecond here is latency added to every wait on arm_settled.
+extern float ARM_SETTLE_ERROR;   // arm degrees
+extern float ARM_SETTLE_TIME_MS;
 
-// True once the arm is within ARM_SETTLE_ERROR_DEG of arm_target -- poll
-// this to wait for the arm to actually reach its target. Forced false while
-// the rotation sensor is unplugged, since position is unknown then.
+// True once the arm has settled on arm_target -- poll this to wait for the arm
+// to actually reach its target. Forced false while the rotation sensor is
+// unplugged, since position is unknown then.
+//
+// arm_set_position() clears this synchronously, and arm_task() will not set it
+// again for a target that has since been superseded, so it is never briefly
+// stale-true for the PREVIOUS target the way it used to be. Callers can poll it
+// immediately after arm_set_position() with no settling delay first.
 extern bool arm_settled;
 
 // True while arm_rotation is not reporting a valid position (unplugged or

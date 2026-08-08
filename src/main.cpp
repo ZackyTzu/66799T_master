@@ -52,6 +52,19 @@ void initialize() {
 	vexdash::watch_config("kG",    &ARM_KG,        "arm/pid");
 	vexdash::watch_config("minV",  &ARM_MIN_VOLTAGE, "arm/pid");
 
+	// --- vexdash: live settle tuning. These feed the arm/cascade PIDs'
+	// settle_error and settle_time directly (see arm.h / cascade.h), so dragging
+	// them retunes every wait on arm_settled / cascade_settled at once. ---
+	vexdash::watch_config("error",   &ARM_SETTLE_ERROR,       "arm/settle");     // arm deg
+	vexdash::watch_config("time_ms", &ARM_SETTLE_TIME_MS,     "arm/settle");
+	vexdash::watch_config("error",   &CASCADE_SETTLE_ERROR,   "cascade/settle"); // cascade deg
+	vexdash::watch_config("time_ms", &CASCADE_SETTLE_TIME_MS, "cascade/settle");
+
+	// Looser bands for X's y_engaged sequence only (see drive.cpp) -- raise
+	// these until that sequence stops pausing between its steps.
+	vexdash::watch_config("arm_error",     &X_SEQ_ARM_SETTLE_ERROR,     "x_seq/settle");
+	vexdash::watch_config("cascade_error", &X_SEQ_CASCADE_SETTLE_ERROR, "x_seq/settle");
+
 	// --- vexdash: on-demand PID tests (set the target, toggle "run", watch the Graph) ---
 	vexdash::watch_config("test_distance", &test_distance,  "drive/test"); // inches
 	vexdash::watch_config("run_drive",     &run_drive_test, "drive/test"); // toggle ON to drive

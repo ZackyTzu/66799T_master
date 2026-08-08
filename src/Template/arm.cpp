@@ -20,12 +20,13 @@ float ARM_DOWN_DEG = 1;
 float ARM_POS_1_DEG = 287;
 float ARM_POS_2_DEG = 157.5;   // LEFT sequence's final position, after the cascade is back at 0
 float ARM_POS_3_DEG = 265;  // LEFT sequence's raised position, before coming back to POS_2
-float ARM_POS_4_DEG = 7.5;  // just off the bottom hard stop -- see ArmPosition::POS_4 in arm.h
+float ARM_POS_4_DEG = 9;  // just off the bottom hard stop -- see ArmPosition::POS_4 in arm.h
 float ARM_CLAW_CLEAR_DEG = 180; // rotated to before the claw opens, if the arm was resting at POS_2 (~160) -- see Drive::control_arcade's A-button handling in drive.cpp
 float ARM_DOWN_HOLD_DEG = 28.5; // B's target instead of DOWN, if the arm was at POS_2 with the claw closed -- see Drive::control_arcade's B-button handling in drive.cpp
 float ARM_DOWN_HOLD_FINAL_DEG = 10; // where A continues to from DOWN_HOLD once the claw opens -- see Drive::control_arcade's A-button handling in drive.cpp
 float ARM_BACK_DEG = 180;   // where arm_back() parks the arm in auton -- see arm_back() in auton-routines.cpp
 float ARM_BACK_2_DEG = 175; // where arm_back2() parks the arm in auton -- see arm_back2() in auton-routines.cpp
+float ARM_CASCADE_CLEAR_DEG = 260; // tucked clear of the other components before the cascade comes down -- see Drive::control_arcade's Y sequence in drive.cpp
 float arm_level_1_rotate = 2.5;
 // Soft travel limits in arm degrees. Targets are clamped here so a bad preset
 // stalls the motor against nothing instead of slamming the hard stop.
@@ -76,21 +77,24 @@ int arm_max_voltage_override = 0;
 // Keep this as small as it can be and still break static friction. Too high
 // and it overpowers KP right at the settle boundary: the arm gets slammed
 // toward the target at full ARM_MIN_VOLTAGE the instant error crosses
-// ARM_SETTLE_ERROR_DEG, overshoots past it, error flips sign, and it gets
+// ARM_SETTLE_ERROR, overshoots past it, error flips sign, and it gets
 // slammed back the other way -- a bang-bang limit cycle that looks like wild
 // oscillation and never settles. That's almost certainly what a violent
 // oscillation right as the arm nears a target is -- lower this first before
 // touching KP/KD. Live-tunable on the dashboard (arm/pid, "minV").
 float ARM_MIN_VOLTAGE = 25; // out of 127
 
-// Max error (arm degrees) to be considered "arrived" -- see arm_settled below.
-// The old 20 motor degrees was ~6.7 arm degrees; this is a bit tighter. Loosen
-// it if preset sequences start hitting their PRESET_STEP_TIMEOUT_MS.
-float ARM_SETTLE_ERROR_DEG = 5.75;
+// Fed straight into armPID's settle_error/settle_time every loop, so the arm
+// settles through PID::is_settled() rather than an instantaneous |error| test
+// -- see arm.h. Loosen the error if preset sequences start hitting their
+// PRESET_STEP_TIMEOUT_MS; raise the time only if a fast move reports settled
+// while it's still swinging through the band.
+float ARM_SETTLE_ERROR = 7;    // arm degrees (the old 20 motor degrees was ~6.7)
+float ARM_SETTLE_TIME_MS = 0;  // 0 = settled as soon as error enters the band
 
-// True once the arm is within ARM_SETTLE_ERROR_DEG of arm_target. Lets other
-// code (e.g. Drive::control_arcade) wait for the arm to actually get there
-// before doing something that depends on it, instead of guessing a delay.
+// True once the arm has settled on arm_target. Lets other code (e.g.
+// Drive::control_arcade) wait for the arm to actually get there before doing
+// something that depends on it, instead of guessing a delay.
 bool arm_settled = false;
 
 bool arm_sensor_ok = false;
@@ -101,6 +105,13 @@ bool arm_sensor_ok = false;
 // arm_set_position() call.
 static bool arm_move_requested = false;
 
+// Bumped by every arm_set_position() call. arm_task() captures it at the top of
+// a loop and refuses to publish arm_settled if it changed while that loop was
+// computing, so a settle result for the OLD target can never land on top of a
+// brand new one. Counting calls rather than comparing arm_target also covers
+// re-requesting the position the arm is already sitting at.
+static int arm_target_generation = 0;
+
 float tele_arm_angle = 0;
 float tele_arm_target = 0;
 float tele_arm_error = 0;
@@ -110,9 +121,14 @@ float tele_arm_output = 0;
 // would look like a huge error and slam the arm).
 static float arm_last_good_deg = 0;
 
+// Clears arm_settled before returning, so a caller that polls it on the very
+// next line can't read the previous target's result. arm_task() picks the new
+// target up on its next 10ms loop and restarts the settle timer there.
 void arm_set_position(ArmPosition pos){
   arm_move_requested = true;
   arm_target = pos;
+  arm_settled = false;
+  arm_target_generation++;
 }
 
 // Rotation::get_position() returns centidegrees, and PROS_ERR when the sensor
@@ -164,6 +180,7 @@ float arm_target_degrees(ArmPosition pos){
     case ArmPosition::DOWN_HOLD_FINAL: arm_deg = ARM_DOWN_HOLD_FINAL_DEG; break;
     case ArmPosition::ARM_BACK: arm_deg = ARM_BACK_DEG; break;
     case ArmPosition::ARM_BACK_2: arm_deg = ARM_BACK_2_DEG; break;
+    case ArmPosition::CASCADE_CLEAR: arm_deg = ARM_CASCADE_CLEAR_DEG; break;
     default:                 arm_deg = ARM_DOWN_DEG;  break;
   }
   return clamp(arm_deg, ARM_MIN_DEG, ARM_MAX_DEG);
@@ -181,7 +198,14 @@ void arm_task(){
   // dashboard shows it, so start it from a known value.
   arm.tare_position();
 
+  // settle_error/settle_time are refreshed from the globals every loop below;
+  // timeout stays 0 (= never) because this PID runs for the whole match rather
+  // than per-move, so a non-zero timeout would report settled forever once
+  // time_spent_running passed it.
   PID armPID(0, ARM_KP, ARM_KI, ARM_KD, ARM_STARTI);
+
+  // Last generation this loop restarted the settle timer for.
+  int settled_for_generation = -1;
 
   while(true){
     // There is no startup homing step. arm_rotation sits on the arm shaft and
@@ -200,6 +224,17 @@ void arm_task(){
       continue;
     }
 
+    // Read once, up front: everything below (including the guard on publishing
+    // arm_settled) has to agree on which request it is working for.
+    int generation = arm_target_generation;
+    if(generation != settled_for_generation){
+      // New target -- the time already banked in the band belongs to the old
+      // one, so ARM_SETTLE_TIME_MS is measured from here.
+      armPID.time_spent_settled = 0;
+      armPID.accumulated_error = 0;
+      settled_for_generation = generation;
+    }
+
     float target = arm_target_degrees(arm_target);
     float position = arm_get_position_deg();
     float error = target - position;
@@ -214,14 +249,25 @@ void arm_task(){
       arm.move(0);
       tele_arm_output = 0;
       arm_settled = false;
+      armPID.time_spent_settled = 0; // don't count a dropout as time in the band
       delay(10);
       continue;
     }
 
+    // Re-read every loop so dashboard changes take effect immediately, same as
+    // the gains. compute() is what banks time_spent_settled, so settle_error
+    // has to be current BEFORE the call.
+    armPID.settle_error = ARM_SETTLE_ERROR;
+    armPID.settle_time = ARM_SETTLE_TIME_MS;
+
     float output = armPID.compute(error) + ARM_KG;
 
-    bool settled = fabs(error) < ARM_SETTLE_ERROR_DEG;
-    if(!settled && fabs(output) < ARM_MIN_VOLTAGE){
+    // The min-voltage kick is gated on being in the band right now, NOT on the
+    // full settle: with a non-zero ARM_SETTLE_TIME_MS, waiting for is_settled()
+    // here would keep forcing ARM_MIN_VOLTAGE at the arm while it sits inside
+    // the band, which is exactly the bang-bang oscillation described above.
+    bool in_band = fabs(error) < ARM_SETTLE_ERROR;
+    if(!in_band && fabs(output) < ARM_MIN_VOLTAGE){
       output = error > 0 ? ARM_MIN_VOLTAGE : -ARM_MIN_VOLTAGE;
     }
 
@@ -232,7 +278,13 @@ void arm_task(){
 
     arm.move(output);
     tele_arm_output = output;
-    arm_settled = settled;
+
+    // Only publish if this loop's work still describes the current request --
+    // arm_set_position() may have landed mid-loop, and it already set
+    // arm_settled false for the new target.
+    if(generation == arm_target_generation){
+      arm_settled = armPID.is_settled();
+    }
     delay(10);
   }
 }

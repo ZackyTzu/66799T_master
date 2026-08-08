@@ -728,24 +728,50 @@ void Drive::turn_to_point(float X_position, float Y_position, float extra_angle_
 // -- tune once the real extend limit has been tested.
 const int CASCADE_EXTEND_LIMIT_DEG = 3800;
 
-// Preset button cascade targets. Change these values to retarget.
+// Preset button cascade targets. Change these values to retarget. Each one is
+// the previous target divided by 1.5, so the Y/X presets extend the cascade
+// less far than they used to (old values in the comments).
+// NOTE: back up from the 363 the /1.5 pass left it at. This is the height the
+// arm rotates up to POS_1 at, and 363 was not far enough out to clear the other
+// components -- the arm jammed on the way up and sat there until its wait timed
+// out. Keep this above CASCADE_ARM_TUCK_DEG.
 int CASCADE_PRESET_DEG = 545;       // Y -> ArmPosition::POS_1, first cascade move
-int CASCADE_PRESET_2_DEG = 595;     // X -> ArmPosition::POS_3, first cascade move
-int CASCADE_RIGHT_FINAL_DEG = 220;  // Y -> cascade's 2nd move (down a bit), once the arm settles at POS_1
-int CASCADE_LEFT_FINAL_DEG = 0;     // X -> cascade's 2nd move, once the arm reaches POS_3
-const int CASCADE_MOVE_VELOCITY = 114; // move_absolute() speed, out of 200 rpm
+int CASCADE_PRESET_2_DEG = 397;     // X -> ArmPosition::POS_3, first cascade move (was 595)
+int CASCADE_RIGHT_FINAL_DEG = 147;  // Y -> cascade's 2nd move (down a bit), once the arm settles at POS_1 (was 220)
+int CASCADE_LEFT_FINAL_DEG = 0;     // X -> cascade's 2nd move, once the arm reaches POS_3 (fully retracted, unchanged by /1.5)
+// move_absolute() speed for the cascade moves in the Y and X preset sequences,
+// out of 200 rpm (green cartridge, so 200 is the ceiling). Only the
+// driver-facing presets use these; auton passes its own velocity to score()
+// (see auton-routines.cpp).
+const int CASCADE_PRESET_MOVE_VELOCITY = 107;
+// Used instead for Y's first move when that move is a descent -- i.e. Y pressed
+// with the cascade raised above CASCADE_PRESET_DEG, which at the normal speed
+// took too long to come down. Extending out from a low cascade still uses the
+// speed above.
+const int CASCADE_DESCEND_VELOCITY = 160;
 const int CASCADE_MANUAL_DOWN_SPEED = 67; // UP (d-pad) manual retract, out of 127
 
-// Waiting on cascade/arm move_absolute() inside a preset sequence: max error to
-// count as "arrived", and how long to wait before giving up and moving on.
-const int CASCADE_SETTLE_ERROR_DEG = 20;
+// How long a preset sequence waits on one step before giving up and moving on.
+// The "arrived" tolerance itself is not defined here: these waits use the one
+// global CASCADE_SETTLE_ERROR (cascade.cpp), so tuning the cascade's settle in
+// one place changes teleop presets, auton and the PID together. This file used
+// to declare its own const CASCADE_SETTLE_ERROR_DEG = 20, which quietly shadowed
+// the global and made edits to it do nothing here.
 const int PRESET_STEP_TIMEOUT_MS = 3000;
-// arm_settled is recomputed by arm_task() every 10ms, so it stays stale (true
-// for the *previous* target) briefly after arm_set_position() -- wait this long
-// before trusting it.
-const int ARM_SETTLE_LATENCY_MS = 30;
 
-// Looser than ARM_SETTLE_ERROR_DEG, used only by the A-button claw-open wait
+// A cascade raised past this has to bring the arm down to
+// ArmPosition::CASCADE_CLEAR (ARM_CASCADE_CLEAR_DEG, 260, see arm.cpp) before
+// it comes down, whatever the arm is doing -- see Y's arm_first split below.
+// It's also roughly the height at which the arm has room to swing between low
+// and high, which is why CASCADE_PRESET_DEG sits above it.
+const int CASCADE_ARM_TUCK_DEG = 500;
+// Its own, much longer bail-out than PRESET_STEP_TIMEOUT_MS: coming all the way
+// down from CASCADE_EXTEND_LIMIT_DEG (3800) to CASCADE_PRESET_DEG at
+// CASCADE_PRESET_MOVE_VELOCITY (107 rpm, ~642 deg/s) takes ~5.2s, so a 3s
+// timeout would give up and rotate the arm while the cascade was still high.
+const int CASCADE_CLEAR_TIMEOUT_MS = 9000;
+
+// Looser than ARM_SETTLE_ERROR, used only by the A-button claw-open wait
 // (arm_wait_settled_solo). If the arm is stuck/jammed short of CLAW_CLEAR or
 // DOWN, waiting on the tight global settle would hold the claw shut until
 // PRESET_STEP_TIMEOUT_MS expires. This lets it open as soon as the arm is
@@ -753,6 +779,21 @@ const int ARM_SETTLE_LATENCY_MS = 30;
 // smallest gap between claw-sequence targets (DOWN=1 to DOWN_HOLD=15, 14 deg)
 // so it doesn't open before the arm has actually moved out of the way.
 const float ARM_CLAW_OPEN_SETTLE_ERROR_DEG = 10;
+
+// Looser settle bands used ONLY by X's y_engaged sequence
+// (start_y_engaged_sequence below), which chains four moves back to back and
+// pauses visibly at each handoff while the mechanism creeps the last few
+// degrees into the tight global band. These let each step hand off as soon as
+// the arm/cascade is close enough for the NEXT move to be safe, instead of
+// waiting for it to actually stop.
+//
+// They override the global settle for those waits only -- nothing else on the
+// robot (other presets, auton, the PIDs' own holding behaviour) gets looser.
+// Raise them until the sequence flows; the ceiling is how far off a step can
+// hand off before the following move collides with something. Live-tunable on
+// the dashboard ("x_seq/settle").
+float X_SEQ_ARM_SETTLE_ERROR = 15;      // arm degrees (global is 7)
+float X_SEQ_CASCADE_SETTLE_ERROR = 60;  // cascade degrees (global is 25)
 
 // True while a RIGHT/LEFT preset sequence owns the cascade. Cleared as soon as
 // the driver takes manual control with L1/L2, which also tells a running
@@ -773,24 +814,50 @@ static bool preset_still_owns(int seq_id){
 }
 
 // Wait for the cascade to reach target_deg. Returns false if the sequence was
-// cancelled, so the caller can stop early.
-static bool cascade_wait_settled(int seq_id, int target_deg){
+// cancelled, so the caller can stop early. timeout_ms only needs raising for a
+// wait that can span most of the cascade's travel -- see the Y sequence.
+//
+// settle_error > 0 replaces the global CASCADE_SETTLE_ERROR for this one wait;
+// 0 (the default) uses the global. Only X's y_engaged sequence passes one.
+static bool cascade_wait_settled(int seq_id, int target_deg, int timeout_ms = PRESET_STEP_TIMEOUT_MS,
+                                 float settle_error = 0){
+  float band = settle_error > 0 ? settle_error : CASCADE_SETTLE_ERROR;
   int waited_ms = 0;
-  while(fabs(cascade1.get_position() - target_deg) > CASCADE_SETTLE_ERROR_DEG){
+  while(fabs(cascade1.get_position() - target_deg) > band){
     if(!preset_still_owns(seq_id)) return false;
     delay(10);
     waited_ms += 10;
-    if(waited_ms > PRESET_STEP_TIMEOUT_MS) break;
+    if(waited_ms > timeout_ms) break;
   }
   return preset_still_owns(seq_id);
 }
 
+// Send the cascade to CASCADE_PRESET_DEG, Y's first move. Coming DOWN to it
+// from a raised cascade runs at CASCADE_DESCEND_VELOCITY; extending out to it
+// from below stays at the normal preset speed.
+static void cascade_move_to_preset(){
+  int velocity = cascade1.get_position() > CASCADE_PRESET_DEG
+               ? CASCADE_DESCEND_VELOCITY
+               : CASCADE_PRESET_MOVE_VELOCITY;
+  cascade1.move_absolute(CASCADE_PRESET_DEG, velocity);
+  cascade2.move_absolute(CASCADE_PRESET_DEG, velocity);
+}
+
 // Wait for the arm to reach whatever target was last set with
 // arm_set_position(). Same cancellation contract as cascade_wait_settled().
-static bool arm_wait_settled(int seq_id){
-  delay(ARM_SETTLE_LATENCY_MS);
+// No settling delay up front: arm_set_position() clears arm_settled itself, so
+// the flag can no longer read stale-true for the previous target (see arm.h).
+//
+// settle_error > 0 replaces the global band for this one wait, measuring the
+// angle here rather than reading arm_settled -- the flag is computed by
+// arm_task() against ARM_SETTLE_ERROR, so it can't answer for a different
+// tolerance. 0 (the default) keeps using arm_settled, which is what honours
+// ARM_SETTLE_TIME_MS. Only X's y_engaged sequence passes one.
+static bool arm_wait_settled(int seq_id, float settle_error = 0){
   int waited_ms = 0;
-  while(!arm_settled){
+  while(settle_error > 0
+          ? fabs(arm_target_degrees(arm_target) - arm_get_position_deg()) > settle_error
+          : !arm_settled){
     if(!preset_still_owns(seq_id)) return false;
     delay(10);
     waited_ms += 10;
@@ -803,10 +870,14 @@ static bool arm_wait_settled(int seq_id){
 // sequence below) that never touch the cascade -- so unlike preset_still_owns(),
 // this doesn't require cascade_preset_active to still be true, only that a
 // later button press hasn't superseded this sequence's id.
+//
+// Measures the error itself instead of reading tele_arm_error, which arm_task()
+// only refreshes every 10ms and is therefore stale for the old target right
+// after arm_set_position() -- that staleness is what the settling delay that
+// used to sit here was working around.
 static bool arm_wait_settled_solo(int seq_id){
-  delay(ARM_SETTLE_LATENCY_MS);
   int waited_ms = 0;
-  while(fabs(tele_arm_error) > ARM_CLAW_OPEN_SETTLE_ERROR_DEG){
+  while(fabs(arm_target_degrees(arm_target) - arm_get_position_deg()) > ARM_CLAW_OPEN_SETTLE_ERROR_DEG){
     if(seq_id != preset_sequence_id) return false;
     delay(10);
     waited_ms += 10;
@@ -845,6 +916,7 @@ static void start_claw_open_sequence(ArmPosition clear_pos){
  */
 
 void Drive::control_arcade(){
+  claw.set_value(true);
   double throttle = 0;
   double turn = 0;
   bool bt_a=false , last_bt_a=false, bumper_bt_a=false;
@@ -853,6 +925,10 @@ void Drive::control_arcade(){
   bool bt_b=false , last_bt_b=false;
   bool bt_x=false , last_bt_x=false;
   bool bt_down=false , last_bt_down=false;
+  // Edge state for the cascade limit switch, so it only re-zeros the encoders
+  // the tick it arrives on the switch -- see the tare below. Starts false, so a
+  // cascade already resting on the switch at opcontrol start still gets one tare.
+  bool last_cascade_at_limit=false;
   // The two pneumatics are no longer independent per-button toggles -- RIGHT
   // and DOWN both write both of them, and a low arm suppresses op_toggle.
   // op_toggle_state is a REQUEST, not the solenoid's state: it survives while
@@ -877,9 +953,10 @@ void Drive::control_arcade(){
   cascade1.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
   cascade2.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
 
-  // The Y preset: open the claw, extend the cascade, raise the arm to POS_1,
-  // and once the arm settles bring the cascade back down a bit to
-  // CASCADE_RIGHT_FINAL_DEG. Two callers below in the loop:
+  // The Y preset: open the claw, get the arm and the cascade to
+  // CASCADE_PRESET_DEG / POS_1 in whichever order clears the other (see the
+  // arm_high split below), then once the arm settles at POS_1 bring the cascade
+  // back down a bit to CASCADE_RIGHT_FINAL_DEG. Two callers below in the loop:
   //   - Y itself.
   //   - RIGHT's first press (the one that turns op_toggle on), which runs the
   //     identical move, y_engaged included -- so X after either button behaves
@@ -889,16 +966,46 @@ void Drive::control_arcade(){
     cascade_preset_active = true;
     int y_seq_id = ++preset_sequence_id;
     claw.set_value(false);
-    bumper_bt_a = false; // keep the A toggle in sync, else the claw.set_value(bumper_bt_a) above re-closes this next tick
-    cascade1.move_absolute(CASCADE_PRESET_DEG, CASCADE_MOVE_VELOCITY);
-    cascade2.move_absolute(CASCADE_PRESET_DEG, CASCADE_MOVE_VELOCITY);
-    arm_set_position(ArmPosition::POS_1);
-    // Runs on its own task so waiting for the arm doesn't block the rest
-    // of control_arcade() (drive, intake, other buttons).
-    pros::Task([y_seq_id]{
+    bumper_bt_a = true; // keep the A toggle in sync, else the claw.set_value(bumper_bt_a) above re-closes this next tick
+    // Which of the two moves first:
+    //   - Cascade raised past CASCADE_ARM_TUCK_DEG: the arm comes down to
+    //     CASCADE_CLEAR first NO MATTER WHERE IT IS, and only then does the
+    //     cascade descend. A cascade that high has room for the arm to rotate
+    //     from anywhere, and the arm has to be out of the way before it comes
+    //     down through the other components.
+    //   - Otherwise, arm already up in the fouling range: same thing, tuck it
+    //     to CASCADE_CLEAR before the cascade moves.
+    //   - Otherwise (arm low, cascade low): the CASCADE goes first, because the
+    //     arm has no room to rotate up until it's out at CASCADE_PRESET_DEG.
+    //     Rotating the arm first here is what left it stalling against the
+    //     other components, stuck down low until its wait timed out.
+    bool arm_first = cascade1.get_position() > CASCADE_ARM_TUCK_DEG
+                  || arm_get_position_deg() >= ARM_CASCADE_CLEAR_DEG;
+    if(!arm_first){
+      cascade_move_to_preset(); // starts on the press; the arm waits on it below
+    }
+    // Runs on its own task so waiting for the cascade and the arm doesn't block
+    // the rest of control_arcade() (drive, intake, other buttons).
+    pros::Task([y_seq_id, arm_first]{
+      if(arm_first){
+        // Waits for the arm to physically reach CASCADE_CLEAR, not just for the
+        // target to be set, so the cascade never comes down while the arm is
+        // still up where it would foul.
+        arm_set_position(ArmPosition::CASCADE_CLEAR);
+        if(!arm_wait_settled(y_seq_id)) return;
+        cascade_move_to_preset();
+      }
+      // Either way, the arm only rotates up to POS_1 once the cascade has
+      // actually ARRIVED at CASCADE_PRESET_DEG. That height is what gives the
+      // arm room to swing up; starting before it gets there is what jammed the
+      // arm. Long timeout because this also covers the cascade coming a long
+      // way down to the preset from fully extended.
+      if(!cascade_wait_settled(y_seq_id, CASCADE_PRESET_DEG, CASCADE_CLEAR_TIMEOUT_MS)) return;
+
+      arm_set_position(ArmPosition::POS_1);
       if(!arm_wait_settled(y_seq_id)) return;
-      cascade1.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
-      cascade2.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
+      cascade1.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_PRESET_MOVE_VELOCITY);
+      cascade2.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_PRESET_MOVE_VELOCITY);
     });
   };
 
@@ -914,8 +1021,8 @@ void Drive::control_arcade(){
     y_engaged = false;  // consumed
     cascade_preset_active = true;
     int x_seq_id = ++preset_sequence_id;
-    cascade1.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
-    cascade2.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_MOVE_VELOCITY);
+    cascade1.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_PRESET_MOVE_VELOCITY);
+    cascade2.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_PRESET_MOVE_VELOCITY);
     // Run on its own task so the waits between steps don't block the rest
     // of control_arcade() (drive, intake, other buttons). Each wait bails
     // out if the driver takes the cascade back over with L1/L2, or presses
@@ -925,13 +1032,18 @@ void Drive::control_arcade(){
       //    to start moving, then 2. raise the arm to POS_3.
       pros::delay(100);
       if(!preset_still_owns(x_seq_id)) return;
+      // Both waits here use the looser X_SEQ_* bands instead of the global
+      // settle, so each step hands off as soon as the mechanism is close
+      // enough rather than after it has fully stopped -- see their definitions
+      // near the top of the file.
       arm_set_position(ArmPosition::POS_3);
-      if(!arm_wait_settled(x_seq_id)) return;
+      if(!arm_wait_settled(x_seq_id, X_SEQ_ARM_SETTLE_ERROR)) return;
 
       // 3. retract the cascade all the way back to CASCADE_LEFT_FINAL_DEG.
-      cascade1.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
-      cascade2.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_MOVE_VELOCITY);
-      if(!cascade_wait_settled(x_seq_id, CASCADE_LEFT_FINAL_DEG)) return;
+      cascade1.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_PRESET_MOVE_VELOCITY);
+      cascade2.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_PRESET_MOVE_VELOCITY);
+      if(!cascade_wait_settled(x_seq_id, CASCADE_LEFT_FINAL_DEG,
+                               PRESET_STEP_TIMEOUT_MS, X_SEQ_CASCADE_SETTLE_ERROR)) return;
 
       // 4. rotate the arm down to POS_2, cascade holds where it is --
       //    move_absolute() keeps it there, and cascade_preset_active stays
@@ -1011,7 +1123,7 @@ void Drive::control_arcade(){
       }
     }
     last_bt_a = bt_a;
-    claw.set_value(bumper_bt_a);
+    claw.set_value(!bumper_bt_a);
 
     // Gates op_toggle below.
     bool arm_low = arm_get_position_deg() <= ARM_DOWN_HOLD_DEG;
@@ -1056,16 +1168,27 @@ void Drive::control_arcade(){
     toggle.set_value(toggle_state);
     op_toggle.set_value(op_toggle_state && !arm_low);
 
-    // Cascade limit switch: this one reads 1 when pressed, 0 when not
-    // pressed. Every time it's triggered, re-zero both cascade encoders
-    // so the physical hard stop is always "0 degrees" -- this corrects any
-    // encoder drift picked up over the match, and the existing L2 (retract)
-    // check below (cascade1.get_position() <= 0) will now also stop the
+    // Cascade limit switch: this one reads 1 when pressed, 0 when not pressed.
+    // Re-zero both cascade encoders on the RISING EDGE -- the tick it first
+    // arrives on the switch -- so the physical hard stop is always "0 degrees".
+    // That still corrects any encoder drift picked up over the match, and the
+    // L2 (retract) check below (cascade1.get_position() <= 0) still stops the
     // motors right at the switch instead of relying on drifted encoder math.
-    if(cascade_limit.get_value() == 1){
+    //
+    // Deliberately NOT re-tared on every tick the switch is held, which is what
+    // it used to do. move_absolute()'s target is measured from the encoder
+    // zero, so re-zeroing under an in-flight move drags the target along with
+    // it: a preset issued with the cascade already resting on the switch (which
+    // is exactly where the X sequence parks it -- CASCADE_LEFT_FINAL_DEG is 0)
+    // crept up a few degrees and stalled, and only a second press -- by which
+    // point the cascade was off the switch and no longer taring -- ran the move
+    // properly. That was the "have to press Y twice" bug.
+    bool cascade_at_limit = cascade_limit.get_value() == 1;
+    if(cascade_at_limit and !last_cascade_at_limit){
       cascade1.tare_position();
       cascade2.tare_position();
     }
+    last_cascade_at_limit = cascade_at_limit;
 
     //intake
     if(master.get_digital(DIGITAL_R1)){
@@ -1126,8 +1249,10 @@ void Drive::control_arcade(){
       }
     }
 
-    // Y: claw open, cascade to POS_1, arm to POS_1, then once the arm
-    // settles at POS_1, cascade moves down a bit to CASCADE_RIGHT_FINAL_DEG.
+    // Y: claw open, arm and cascade to CASCADE_CLEAR / CASCADE_PRESET_DEG in
+    // whichever order clears the other, arm on to POS_1 once the cascade has
+    // arrived, then once the arm settles at POS_1, cascade moves down a bit to
+    // CASCADE_RIGHT_FINAL_DEG.
     bt_y = master.get_digital(DIGITAL_Y);
     if(bt_y and !last_bt_y){
       // Y must never bring op_toggle on. Clearing the request here (rather than
