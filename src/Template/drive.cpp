@@ -762,9 +762,14 @@ const int PRESET_STEP_TIMEOUT_MS = 3000;
 // A cascade raised past this has to bring the arm down to
 // ArmPosition::CASCADE_CLEAR (ARM_CASCADE_CLEAR_DEG, 260, see arm.cpp) before
 // it comes down, whatever the arm is doing -- see Y's arm_first split below.
-// It's also roughly the height at which the arm has room to swing between low
-// and high, which is why CASCADE_PRESET_DEG sits above it.
-const int CASCADE_ARM_TUCK_DEG = 500;
+// This is now the ONLY trigger for that tuck. The arm's own angle used to
+// trigger it as well, so the 260-and-back move fired on a low cascade whenever
+// the arm was already high; only a cascade this far out needs it.
+// Deliberately above CASCADE_PRESET_DEG (545): it no longer means "the height
+// the arm can swing at" (CASCADE_PRESET_DEG is that, and Y still waits to reach
+// it before rotating to POS_1), only "high enough that coming down needs the
+// arm tucked".
+const int CASCADE_ARM_TUCK_DEG = 1000;
 // Its own, much longer bail-out than PRESET_STEP_TIMEOUT_MS: coming all the way
 // down from CASCADE_EXTEND_LIMIT_DEG (3800) to CASCADE_PRESET_DEG at
 // CASCADE_PRESET_MOVE_VELOCITY (107 rpm, ~642 deg/s) takes ~5.2s, so a 3s
@@ -919,6 +924,11 @@ void Drive::control_arcade(){
   claw.set_value(true);
   double throttle = 0;
   double turn = 0;
+  // bumper_bt_a is the claw's requested state: true = OPEN, false = CLOSED.
+  // The loop writes it out as claw.set_value(!bumper_bt_a), since set_value(false)
+  // is what opens the solenoid. Every read/write of it below follows that
+  // convention -- half of them didn't after the polarity flip, which is what
+  // killed A's "rotate clear, then open" move.
   bool bt_a=false , last_bt_a=false, bumper_bt_a=false;
   bool bt_Right=false , last_bt_Right=false;
   bool bt_y=false , last_bt_y=false;
@@ -966,21 +976,20 @@ void Drive::control_arcade(){
     cascade_preset_active = true;
     int y_seq_id = ++preset_sequence_id;
     claw.set_value(false);
-    bumper_bt_a = true; // keep the A toggle in sync, else the claw.set_value(bumper_bt_a) above re-closes this next tick
-    // Which of the two moves first:
-    //   - Cascade raised past CASCADE_ARM_TUCK_DEG: the arm comes down to
+    bumper_bt_a = true; // true = open; keep the A toggle in sync, else claw.set_value(!bumper_bt_a) re-closes this next tick
+    // Which of the two moves first, decided by the CASCADE HEIGHT ALONE:
+    //   - Cascade raised past CASCADE_ARM_TUCK_DEG (1000): the arm comes down to
     //     CASCADE_CLEAR first NO MATTER WHERE IT IS, and only then does the
     //     cascade descend. A cascade that high has room for the arm to rotate
     //     from anywhere, and the arm has to be out of the way before it comes
     //     down through the other components.
-    //   - Otherwise, arm already up in the fouling range: same thing, tuck it
-    //     to CASCADE_CLEAR before the cascade moves.
-    //   - Otherwise (arm low, cascade low): the CASCADE goes first, because the
-    //     arm has no room to rotate up until it's out at CASCADE_PRESET_DEG.
-    //     Rotating the arm first here is what left it stalling against the
-    //     other components, stuck down low until its wait timed out.
-    bool arm_first = cascade1.get_position() > CASCADE_ARM_TUCK_DEG
-                  || arm_get_position_deg() >= ARM_CASCADE_CLEAR_DEG;
+    //   - Otherwise: the CASCADE goes first, because the arm has no room to
+    //     rotate up until it's out at CASCADE_PRESET_DEG. Rotating the arm
+    //     first here is what left it stalling against the other components,
+    //     stuck down low until its wait timed out.
+    // The arm's own angle used to force the tuck too (|| arm >= 260), which is
+    // why the 260-and-back move also ran with the cascade down low.
+    bool arm_first = cascade1.get_position() > CASCADE_ARM_TUCK_DEG;
     if(!arm_first){
       cascade_move_to_preset(); // starts on the press; the arm waits on it below
     }
@@ -1017,7 +1026,7 @@ void Drive::control_arcade(){
   // version did.
   auto start_y_engaged_sequence = [&]{
     claw.set_value(true);
-    bumper_bt_a = true; // keep the A toggle in sync, else claw.set_value(bumper_bt_a) at the A handler would reopen it next tick
+    bumper_bt_a = false; // false = closed; keep the A toggle in sync, else claw.set_value(!bumper_bt_a) would reopen it next tick
     y_engaged = false;  // consumed
     cascade_preset_active = true;
     int x_seq_id = ++preset_sequence_id;
@@ -1104,12 +1113,12 @@ void Drive::control_arcade(){
     // would have already landed.
     if(claw_open_pending){
       claw_open_pending = false;
-      bumper_bt_a = false;
+      bumper_bt_a = true;
     }
 
     bt_a = master.get_digital(DIGITAL_A);
     if(!bt_a and last_bt_a){
-      bool opening = bumper_bt_a; // bumper_bt_a true = closed; about to flip to false = open (see Y above: claw.set_value(false) opens)
+      bool opening = !bumper_bt_a; // bumper_bt_a true = OPEN (the loop writes claw.set_value(!bumper_bt_a), and set_value(false) is what opens); so currently false = closed = this press opens
       if(opening && arm_settled && arm_target == ArmPosition::POS_2){
         start_claw_open_sequence(ArmPosition::CLAW_CLEAR);
       }
@@ -1291,7 +1300,7 @@ void Drive::control_arcade(){
       // this is what re-arms RIGHT, whose next press counts as a "first press"
       // and runs the Y sequence again. (Used to live on DOWN.)
       op_toggle_state = false;
-      if(arm_target == ArmPosition::POS_2 && bumper_bt_a){
+      if(arm_target == ArmPosition::POS_2 && !bumper_bt_a){ // !bumper_bt_a = claw closed
         arm_set_position(ArmPosition::DOWN_HOLD);
       }
       else{

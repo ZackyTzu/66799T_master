@@ -10,7 +10,7 @@ enum class ScoringLevel {
   LEVEL_opt = 533,  // was 800
   LEVEL_2 = 1333,   // was 2000
   LEVEL_3 = 1733,   // was 2600
-  LEVEL_tpf = 2133, // was 3200
+  LEVEL_tpf = 2233, // was 3200
   LEVEL_4 = 2533    // was 3800
 };
 
