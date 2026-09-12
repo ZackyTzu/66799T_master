@@ -67,6 +67,7 @@ void competition_initialize() {
 	// units DriveL/DriveR.get_position() report, which breaks Drive's odometry.
 	delay(2250);
 	inertial.tare_euler();
+	claw.set_value(false);
 }
 
 void autonomous() {

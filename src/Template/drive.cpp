@@ -672,7 +672,8 @@ void Drive::control_arcade(){
   left_roller.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
   right_roller.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
 
-  bool claw_state = true;
+  // Start closed so whatever auton ended holding isn't dropped when driver starts.
+  bool claw_state = false;
   claw.set_value(claw_state);
 
   // Lift release damping state, see the L1/L2 block below. lift_holding starts

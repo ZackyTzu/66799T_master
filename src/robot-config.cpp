@@ -24,7 +24,9 @@ Motor toggle(-16,MotorGears::green);
 Motor left_roller(-13,MotorGears::green);
 Motor right_roller(19,MotorGears::green);
 
-Rotation arm_rotation(14);
+MotorGroup rollers({left_roller.get_port(), right_roller.get_port()});
+
+Rotation arm_rotation(-14);
 
 adi::DigitalOut claw('H');
 
@@ -82,9 +84,9 @@ Drive chassis(
 
 void default_constants(){
     // Each constant set is in the form of (maxVoltage, kP, kI, kD, startI(, minVoltage)).
-    chassis.set_drive_constants(127, 7, 0, 12.5, 0, 0);
+    chassis.set_drive_constants(127, 12, 0.1, 1, 5, 0);
     chassis.set_heading_constants(64, 1.65, 0, 8, 0);
-    chassis.set_turn_constants(107, 2.9, .10583, 17.4625, 15.0);
+    chassis.set_turn_constants(107, 2.5, .10583, 17.4625, 15.0);
     chassis.set_swing_constants(127, 3.704166667, 0.08466667, 21.1666667, 15);
     
     // Each exit condition set is in the form of (settle_error, settle_time, timeout).
@@ -95,6 +97,39 @@ void default_constants(){
     // (min_voltage, early_exit_distance)
     chassis.set_drive_motion_chain_constants(60, 4);
     chassis.set_turn_motion_chain_constants(50, 5);
+}
+
+/**
+ * Drives the lift to target_deg and holds it there. Blocking: it returns once
+ * the arm has settled within 1 deg or timeout_ms has passed, whichever is
+ * first. Call it with lift_level1..lift_level4 from an auton routine.
+ */
+void lift_to_degrees(double target_deg, int timeout_ms){
+  lift1.set_brake_mode(MotorBrake::hold);
+  lift2.set_brake_mode(MotorBrake::hold);
+
+  // Same feedforward opcontrol uses to stop the arm sagging, so the PID does
+  // not have to carry gravity with a standing error.
+  const double lift_hold_ff = 12;
+  // Raising fights gravity, lowering is helped by it, so the down direction is
+  // capped lower to keep the arm from slamming.
+  const double lift_up_voltage = 127;
+  const double lift_down_voltage = 60;
+  double error = target_deg - fabs(arm_rotation.get_position() / 100.0);
+  // (error, kp, ki, kd, starti, settle_error, settle_time, timeout)
+  // kp/kd are starting points -- tune them on the robot.
+  PID liftPID(error, 4, 0, 10, 0, 1, 100, timeout_ms);
+
+  while(!liftPID.is_settled()){
+    error = target_deg - fabs(arm_rotation.get_position() / 100.0);
+    double output = clamp(liftPID.compute(error) + lift_hold_ff, -lift_down_voltage, lift_up_voltage);
+    lift1.move(output);
+    lift2.move(output);
+    delay(10);
+  }
+
+  lift1.brake();
+  lift2.brake();
 }
 
 // ---- LemLib (only chassis_lemlib.setPose() is used, from Drive::set_coordinates) ----
