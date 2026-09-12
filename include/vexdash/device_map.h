@@ -16,9 +16,18 @@
 //   devmap.add_port(22, DeviceType::kOptical, false, "");  // ADI port A
 //   devmap.send();   // encodes+sends, splitting across frames if needed
 //
-// The snapshot is complete (not incremental): the front-end replaces its
-// whole port state on receipt (§5.12). No dynamic allocation: the staging
-// buffer for entries is a fixed-size member.
+// The snapshot is complete (not incremental). One snapshot may need more than
+// one frame, so the front-end rule is per-BATCH, not per-frame (§5.12): the
+// FIRST frame of a batch replaces the whole port table, and continuation frames
+// merge into it by port. A frame starts a new batch when it repeats a port
+// already seen in the current batch (primary, clock-free) or arrives more than
+// 500ms after the previous one (secondary). That way a split snapshot is not
+// truncated to its last frame, and a port that disappears from a later snapshot
+// still disappears from the table. Send the frames of ONE snapshot back-to-back.
+// 中文：快照是完整的（非增量），但可能拆成多個 frame，所以前端是「以批次為單位」
+// 取代：帶到本批已出現過的埠、或距上一幀超過 500ms＝新批次（整包取代），否則以
+// port 為鍵合併。同一個快照的各幀務必連續送完，中間不要插入延遲。
+// No dynamic allocation: the staging buffer for entries is a fixed-size member.
 
 namespace vexdash {
 
@@ -52,7 +61,9 @@ class DeviceMap {
 
   // Encodes and sends the staged snapshot. If the entries don't fit in one
   // 512-byte frame (protocol.md §5.12), splits across multiple DEVICE_MAP
-  // frames (front-end merges as one snapshot). Returns false on any
+  // frames sent back-to-back; the front-end merges frames that arrive within
+  // its batch window into one snapshot (see the batch rule at the top of this
+  // file -- send the frames of one snapshot without delay). Returns false on any
   // encode/transport failure. Does NOT clear staged entries (call begin()
   // to reset); sending twice re-sends the same snapshot.
   bool send();

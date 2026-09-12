@@ -1,4 +1,5 @@
 #include "main.h"
+#include "tune.h"   // 調參模式的三個鉤子（tune_stop_requested / tune_mode_enabled）
 
 Drive::Drive(DriveStyle drive_style, MotorGroup& left_motors, MotorGroup& right_motors, IMU& inertial, 
              float wheel_diameter, float motor_gear_ratio, float gyro_scale, 
@@ -242,7 +243,12 @@ void Drive::turn_to_angle(float angle, float extra_angle_deg, float extra_drive_
   angle += extra_angle_deg;
   tele_turn_target = angle; // vexdash telemetry
   PID turnPID(reduce_negative_180_to_180(angle - get_absolute_heading()), turn_kp, turn_ki, turn_kd, turn_starti, turn_settle_error, turn_settle_time, turn_timeout);
+  // 固定週期的時間戳，完整理由見 drive_distance() 裡同一個變數上面的長註解。
+  uint32_t loop_stamp = millis();
   while( !turnPID.is_settled() ){
+    // 調參模式下按了 dashboard 的 Run STOP（或動作跑超過 10 秒）就馬上停。
+    // 沒有測試動作在跑的時候永遠回 false，所以自動程式完全不受影響。
+    if(tune_stop_requested()){ break; }
     float error = reduce_negative_180_to_180(angle - get_absolute_heading());
     tele_turn_error = error; // vexdash telemetry
 
@@ -259,7 +265,7 @@ void Drive::turn_to_angle(float angle, float extra_angle_deg, float extra_drive_
     }
 
     drive_with_voltage(output + extra_drive_voltage, -output + extra_drive_voltage);
-    delay(10);
+    Task::delay_until(&loop_stamp, 10);   // 固定週期，理由見 drive_distance()
   }
 }
 
@@ -301,7 +307,23 @@ void Drive::drive_distance(float distance, float heading, bool motion_chaining, 
   PID headingPID(reduce_negative_180_to_180(heading - get_absolute_heading()), heading_kp, heading_ki, heading_kd, heading_starti);
   float start_average_position = (get_left_position_in()+get_right_position_in())/2.0;
   float average_position = start_average_position;
+  // ---- 固定 10ms 週期（2026-09-13）--------------------------------------
+  // 原本結尾是 delay(10)，那是「從現在起再睡 10ms」，所以真正的一輪 =
+  // 10ms + 這一輪的工作時間（兩組編碼器 + IMU 讀取、兩組馬達寫入，全部排隊
+  // 走 smart port）。而 PID::compute()（src/Template/PID.cpp:101/106/111）
+  // 的 kD 是「這一輪與上一輪的誤差差值」、積分是「每一輪累加一次」、
+  // settle/timeout 更是硬寫 time_spent += 10 —— 整套都假設一輪剛好 10ms。
+  //
+  // 於是同一組 kP/kI/kD 在「忙」與「閒」兩種情況下打出來的加減速會不一樣：
+  //   * auton：只有這一條迴圈在跑（外加 set_coordinates() 起的 odom task）。
+  //   * dashboard 調參：多了 tune_drive_loop()（10ms）、tune_ctl_task()
+  //     （20ms）、vexdash 傳輸 task、螢幕 task 一起搶 CPU 與 smart port。
+  // 教練實測「dashboard 調 drive 時底盤的速度變化跟平常明顯不一樣」，這是
+  // 主因之一。delay_until() 是「從上一輪開始的時刻算起滿 10ms」，工作時間
+  // 被吸收在裡面，忙或閒都是同一個週期，調出來的值才搬得過去。
+  uint32_t loop_stamp = millis();
   while(drivePID.is_settled() == false){
+    if(tune_stop_requested()){ break; }   // 見 turn_to_angle() 上面那條的說明
     average_position = (get_left_position_in()+get_right_position_in())/2.0;
     drive_error = distance+start_average_position-average_position;
     if(motion_chaining && fabs(drive_error) < motion_chain_drive_early_exit_range){
@@ -324,11 +346,13 @@ void Drive::drive_distance(float distance, float heading, bool motion_chaining, 
     float right_voltage = drive_output-heading_output + extra_drive_voltage;
     drive_with_voltage(left_voltage, right_voltage);
 
-    // TEMP DEBUG -- remove once the slow/no-turn issue is diagnosed.
-    printf("heading: %.1f, heading_err: %.1f, drive_out: %.1f, heading_out: %.1f, L: %.1f, R: %.1f\n",
-           get_absolute_heading(), heading_error, drive_output, heading_output, left_voltage, right_voltage);
+    // Disabled: this printf ran every 10 ms and flooded the serial link,
+    // which starved the vexdash telemetry stream. Re-enable only for debugging.
+    // printf("heading: %.1f, heading_err: %.1f, drive_out: %.1f, heading_out: %.1f, L: %.1f, R: %.1f\n",
+    //        get_absolute_heading(), heading_error, drive_output, heading_output, left_voltage, right_voltage);
 
-    delay(10);
+    // ⚠ 不要改回 delay(10)：那會讓實際週期隨 CPU 忙碌程度浮動，見上面的說明。
+    Task::delay_until(&loop_stamp, 10);
   }
 }
 
@@ -342,7 +366,10 @@ void Drive::drive_distance(float distance, float heading, bool motion_chaining, 
 
 void Drive::swing_to_angle(float angle, bool move_left, bool motion_chaining){
   PID swingPID(reduce_negative_180_to_180(angle - get_absolute_heading()), swing_kp, swing_ki, swing_kd, swing_starti, swing_settle_error, swing_settle_time, swing_timeout);
+  // 固定週期的時間戳，完整理由見 drive_distance()。
+  uint32_t loop_stamp = millis();
   while(swingPID.is_settled() == false){
+    if(tune_stop_requested()){ break; }   // 見 turn_to_angle() 上面那條的說明
     float error = reduce_negative_180_to_180(angle - get_absolute_heading());
     if(motion_chaining && fabs(error) < motion_chain_turn_early_exit_range){
       break;
@@ -364,7 +391,7 @@ void Drive::swing_to_angle(float angle, bool move_left, bool motion_chaining){
       brake_with_mode_group(DriveL, MotorBrake::hold);
     }
     
-    delay(10);
+    Task::delay_until(&loop_stamp, 10);
   }
 }
 
@@ -679,15 +706,15 @@ void Drive::control_arcade(){
   // true to match the HOLD brake mode set just above.
   double lift_cmd = 0;
   bool lift_holding = true;
-  const double lift_hold_ff = 12;  // tune: least output that stops the arm sagging
+  // lift_hold_ff / lift_slew / lift_up_volt / lift_down_volt / lift_down_volt_claw /
+  // lift_top_deg / lift_bottom_deg / lift_double_tap_ms used to be local consts here;
+  // they now live as Drive members (include/Template/drive.h) so src/tune.cpp can
+  // register them under the dashboard's "lift" group. Default values unchanged.
   // L2 double-tap auto-retract state, see the L1/L2 block below.
   uint32_t l2_last_press = 0;
   uint32_t lift_auto_start = 0;
   bool lift_auto_down = false;
-  const uint32_t lift_double_tap_ms = 400;
   const uint32_t lift_auto_timeout_ms = 3000;
-  const double lift_bottom_deg = 5;
-  const double lift_slew = 8;      // per 10ms tick, so ~145ms from 115 down
 
   // R1/R2 roller state. Intake latches on until R2 opens the claw; eject only
   // lasts as long as R2 is held.
@@ -695,6 +722,11 @@ void Drive::control_arcade(){
   RollerPhase roller_phase = roller_idle;
 
   while(1){
+  // Brain 螢幕的 TUNE 鈕按下去 -> 交棒給 tune_drive_loop()（src/tune.cpp）。
+  // 那邊的迴圈只開底盤、機構全程 hold，因為 L1/L2/R1/R2/X/Y/A/B 在調參模式下
+  // 已經是「跑一次 PID 測試」的按鈕了，留在這裡會變成按 L1 同時抬手臂又開車。
+  // TUNE 關著（預設）時這一行永遠是 false，底下的行為一個字都沒變。
+  if(tune_mode_enabled()){ break; }
   throttle = master.get_analog(ANALOG_LEFT_Y);
   turn = master.get_analog(ANALOG_RIGHT_X);
   
@@ -771,12 +803,12 @@ void Drive::control_arcade(){
     }
 
     double lift_target = lift_hold_ff;
-    if(master.get_digital(DIGITAL_L1) && arm_deg < 270){
-    lift_target = 127;
+    if(master.get_digital(DIGITAL_L1) && arm_deg < lift_top_deg){
+    lift_target = lift_up_volt;
     }
     else if((master.get_digital(DIGITAL_L2) || lift_auto_down) && arm_deg > 0){
       // A closed claw is carrying something, so bring it down gentler.
-      lift_target = claw_state ? -65 : -20;
+      lift_target = claw_state ? lift_down_volt_claw : lift_down_volt;
     }
 
     if(lift_cmd < lift_target){

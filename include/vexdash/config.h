@@ -25,7 +25,21 @@ namespace vexdash {
 
 using ConfigId = std::uint16_t;
 
-constexpr std::size_t kMaxConfigParams = 64;
+// RAISED 64 -> 96 (2026-08-21, F2-f) -- see the matching note on kMaxChannels
+// in telemetry.h. ConfigId is uint16_t, so the id space is nowhere near this;
+// the cost is ~76 bytes of static RAM per extra slot (~2.4 KB for +32) and a
+// longer registration burst, which bounded_retry_write() flow-controls per
+// frame. dplib's own template and downstream team repos (66799T, 66994V)
+// already shipped at 96; this brings lib-core/lib-pros (and the website's
+// downloadable zip, packed from these headers) back in step so a fresh
+// download doesn't silently cap out lower than the template.
+// 中文：上限 64 → 96（2026-08-21，F2-f），理由同 telemetry.h 的 kMaxChannels。
+// ConfigId 是 uint16_t，編號空間差得遠；代價是每格約 76 bytes 靜態記憶體（多 32
+// 格約 2.4KB）與註冊 burst 變長，而 burst 由 bounded_retry_write 逐幀流控。
+// dplib 範本與下游學生 repo（66799T、66994V）早就是 96，這裡把 lib-core/
+// lib-pros（連帶網站下載 zip，就是從這兩顆 header 打包出來的）補回同一格，
+// 不然新下載到的版本上限反而比範本舊。
+constexpr std::size_t kMaxConfigParams = 96;
 
 // C-style callback (see frame_codec.h FrameCallback rationale: no
 // <functional>/heap-backed closures assumed on embedded targets).
