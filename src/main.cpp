@@ -30,6 +30,12 @@ void initialize() {
 	// --- vexdash: stream lift1 onto the Graph: pos/rpm/temp/amp ---
 	vexdash::watch_motor("lift1", lift1);
 
+	// actual motor rpm so a stall/slip shows up next to commanded voltage
+	vexdash::watch_motor("lf", leftFront,  "drive");
+	vexdash::watch_motor("lb", leftBack,   "drive");
+	vexdash::watch_motor("rf", rightFront, "drive");
+	vexdash::watch_motor("rb", rightBack,  "drive");
+
 	// --- vexdash: Device Map -- sensors section ---
 	vexdash::declare_device(arm_rotation.get_port(), vexdash::DeviceType::kRotation, "arm_rotation");
 
