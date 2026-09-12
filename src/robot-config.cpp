@@ -1,47 +1,36 @@
 #include "main.h"
 
-IMU inertial(17);
-// Placeholders -- we don't have tracking wheels. DriveStyle::ZERO_TRACKER means
-// Drive::get_ForwardTracker_position()/get_SidewaysTracker_position() never
-// read these, so the ports only have to be ones nothing else claims.
-// They used to sit on 2 and 1, which collide with distance_sensorL (port 2)
-// and rightMiddle (port 1) below -- moved to 9 and 10, which are free.
-Rotation fwd_tracker(9);
-Rotation sideways_tracker(10);
+IMU inertial(3);
+// No tracking wheels (DriveStyle::ZERO_TRACKER), so the tracker sensors are
+// commented out, along with their Drive constructor arguments below.
+// Rotation fwd_tracker(9);
+// Rotation sideways_tracker(10);
 
 // 66799T
 // negative port number means reversed (there is no separate "reversed" constructor argument)
-Motor leftFront(-4, MotorGears::blue);
-Motor leftMiddle(6, MotorGears::blue);
-Motor leftBack(16, MotorGears::green);
-Motor rightFront(15, MotorGears::blue);
-Motor rightMiddle(-1, MotorGears::blue);
-Motor rightBack(-8, MotorGears::green);
+Motor leftFront(-7, MotorGears::blue);
+Motor leftBack(4, MotorGears::blue);
+Motor rightFront(2, MotorGears::blue);
+Motor rightBack(-1, MotorGears::blue);
 
-MotorGroup leftMotors({leftFront.get_port(), leftMiddle.get_port(), leftBack.get_port()});
-MotorGroup rightMotors({rightFront.get_port(), rightMiddle.get_port(), rightBack.get_port()});
+MotorGroup leftMotors({leftFront.get_port(),leftBack.get_port()});
+MotorGroup rightMotors({rightFront.get_port(), rightBack.get_port()});
 
-Motor intake(-5, MotorGears::green);
-Motor cascade1(7, MotorGears::green);
-Motor cascade2(-3, MotorGears::green);
-Motor arm(18, MotorGears::green);
+Motor lift1(-18,MotorGears::red);
+Motor lift2(12,MotorGears::red);
 
-adi::DigitalOut claw('A');
-adi::DigitalOut op_toggle('B');
-adi::DigitalOut toggle('C');
-adi::DigitalIn cascade_limit('D');
+Motor toggle(-16,MotorGears::green);
 
-Distance distance_sensorL(2);
-Distance distance_sensorR(20);
-Rotation arm_rotation(21);
+Motor left_roller(-13,MotorGears::green);
+Motor right_roller(19,MotorGears::green);
+
+Rotation arm_rotation(14);
+
+adi::DigitalOut claw('H');
 
 
 
 Drive chassis(
-
-    // Add the names of your Drive motors into the motor groups below, separated by commas, i.e. motor_group(Motor1,Motor2,Motor3).
-    // You will input whatever motor names you chose when you configured your robot using the sidebar configurer, they don't have to be "Motor1" and "Motor2".
-
     // Drive Style (see drive.h for option list): 
     Drive::DriveStyle::ZERO_TRACKER,
     
@@ -57,23 +46,23 @@ Drive chassis(
     // Input your wheel diameter. (4" omnis are actually closer to 4.125"):
     2.75,
 
-    // External ratio, must be in decimal, in the format of input teeth/output teeth.
-    // If your motor has an 84-tooth gear and your wheel has a 60-tooth gear, this value will be 1.4.
-    // If the motor drives the wheel directly, this value is 1:
-    48/36, // Changing this from 48/36 to 36/48 is wrong! 36/48 makes odom (x and y values) increment way too slowly. TODO: Figure out why this is.
+    // External ratio, input teeth/output teeth. This used to be written as
+    // 48/36, which is INTEGER division and evaluates to exactly 1 (36/48 gave
+    // 0, which is why odom "barely moved" with it). Every drive distance and
+    // PID constant below was tuned against 1, so 1 is kept explicitly here.
+    1,
 
     // Gyro scale, this is what your gyro reads when you spin the robot 360 degrees.
     // For most cases 360 will do fine here, but this scale factor can be very helpful when precision is necessary.
-    360
-    ,
+    360,
 
     // If you are using position tracking, this is the Forward Tracker port (the tracker which runs parallel to the direction of the chassis).
     // If this is a rotation sensor, enter it in "PORT1" format, inputting the port below.
-    fwd_tracker,
+    // fwd_tracker,
 
     // Input the Forward Tracker diameter (reverse it to make the direction switch)
     // For a tank drive using odom without a forward tracker, this value is useless and does not affect anything:
-    2,
+    // 2,
 
     // Input Forward Tracker center distance (a positive distance corresponds to a tracker on the right side of the robot, negative is left.)
     // For a zero tracker tank drive with odom, put the positive distance from the center of the robot to the right side of the drive.
@@ -81,10 +70,10 @@ Drive chassis(
     5.25,
 
     // Input the Sideways Tracker Port, following the same steps as the Forward Tracker Port:
-    sideways_tracker,
+    // sideways_tracker,
 
     // Sideways tracker diameter (reverse it to make the direction switch):
-    0,
+    // 0,
 
     // Sideways tracker center distance (positive distance is behind the center of the robot, negative is in front):
     0
@@ -94,10 +83,9 @@ Drive chassis(
 void default_constants(){
     // Each constant set is in the form of (maxVoltage, kP, kI, kD, startI(, minVoltage)).
     chassis.set_drive_constants(127, 7, 0, 12.5, 0, 0);
-    chassis.set_heading_constants(64, 1.65, 0, 8, 0); //chassis.set_heading_constants(64, 0.4, 0, 20, 0);      chassis.set_heading_constants(64, 1, 0, 2, 0);
-    chassis.set_turn_constants(107, 2.9, .10583, 17.4625, 15.0); //chassis.set_turn_constants(107, 3.2, .10583, 17.4625, 15.0);
+    chassis.set_heading_constants(64, 1.65, 0, 8, 0);
+    chassis.set_turn_constants(107, 2.9, .10583, 17.4625, 15.0);
     chassis.set_swing_constants(127, 3.704166667, 0.08466667, 21.1666667, 15);
-    chassis.set_wall_constants(74, 0.3, 0.0005, 0, 0); //chassis.set_wall_constants(127, 0.529166667, 0, 0, 0);
     
     // Each exit condition set is in the form of (settle_error, settle_time, timeout).
     chassis.set_drive_exit_conditions(1.875, 45, 3000);
@@ -109,7 +97,7 @@ void default_constants(){
     chassis.set_turn_motion_chain_constants(50, 5);
 }
 
-// LemLib Stuff vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+// ---- LemLib (only chassis_lemlib.setPose() is used, from Drive::set_coordinates) ----
 
 lemlib::Drivetrain drivetrain(
     &leftMotors, // left motors
@@ -161,14 +149,3 @@ lemlib::Chassis chassis_lemlib(
     angular_controller, // angular PID settings
     sensors // odometry sensors
 );
-
-// LemLib Stuff ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-void init() {
-    delay(2500); // wait for imu to calibrate
-    // chassis_lemlib.calibrate(); // TODO: THIS MIGHT BE NEEDED FOR LEMLIB TO WORK! But if this is called, the DriveR.get_position() and DriveL.get_position() units become not degrees anymore for some reason, which breaks my odometry. 
-    start_dashboard();
-    start_arm_task();
-    // static Task screen_task(map_task);
-    // Controller(CONTROLLER_MASTER).rumble("..");
-}

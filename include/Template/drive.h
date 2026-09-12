@@ -2,13 +2,6 @@
 #include "main.h"
 using namespace pros;
 
-// Settle bands used only by X's y_engaged preset sequence in drive.cpp, which
-// hands off between its four moves sooner than the tight global settle allows.
-// Defined and documented next to that sequence's other constants in drive.cpp;
-// declared here so main.cpp can put them on the dashboard.
-extern float X_SEQ_ARM_SETTLE_ERROR;     // arm degrees
-extern float X_SEQ_CASCADE_SETTLE_ERROR; // cascade degrees
-
 class Drive{
     private: 
         float wheel_diameter;
@@ -16,11 +9,11 @@ class Drive{
         float gyro_scale;
         float drive_in_to_deg_ratio;
         float ForwardTracker_center_distance;
-        float ForwardTracker_diameter;
-        float ForwardTracker_in_to_deg_ratio;
+        // float ForwardTracker_diameter;
+        // float ForwardTracker_in_to_deg_ratio;
         float SidewaysTracker_center_distance;
-        float SidewaysTracker_diameter;
-        float SidewaysTracker_in_to_deg_ratio;
+        // float SidewaysTracker_diameter;
+        // float SidewaysTracker_in_to_deg_ratio;
 
         Controller master;
 
@@ -45,8 +38,8 @@ class Drive{
         MotorGroup& DriveL;
         MotorGroup& DriveR;
         IMU& Gyro;
-        Rotation& Fwd_tracker;
-        Rotation& Sideways_tracker;
+        // Rotation& Fwd_tracker;
+        // Rotation& Sideways_tracker;
 
         float turn_max_voltage;
         float turn_kp;
@@ -94,12 +87,6 @@ class Drive{
         float boomerang_lead;
         float boomerang_setback;
 
-        float wall_max_voltage;
-        float wall_kp;
-        float wall_ki;
-        float wall_kd;
-        float wall_starti;
-
         float drive_error = 0;
 
         // --- vexdash live PID telemetry (auto-streamed to the web dashboard) ---
@@ -111,8 +98,10 @@ class Drive{
 
         Drive(DriveStyle drive_style, MotorGroup& left_motors, MotorGroup& right_motors, IMU& inertial, 
               float wheel_diameter, float motor_gear_ratio, float gyro_scale, 
-              Rotation& fwd_tracker, float fwd_tracker_diameter, float fwd_tracker_dist, 
-              Rotation& sideways_tracker, float sideways_tracker_diameter, float sideways_tracker_dist);
+              // Rotation& fwd_tracker, float fwd_tracker_diameter,
+              float fwd_tracker_dist,
+              // Rotation& sideways_tracker, float sideways_tracker_diameter,
+              float sideways_tracker_dist);
         
         void drive_with_voltage(int left_voltage, int right_voltage);
 
@@ -127,7 +116,6 @@ class Drive{
         void set_drive_constants(float drive_max_voltage, float drive_kp, float drive_ki, float drive_kd, float drive_starti, float drive_min_voltage);
         void set_heading_constants(float heading_max_voltage, float heading_kp, float heading_ki, float heading_kd, float heading_starti);
         void set_swing_constants(float swing_max_voltage, float swing_kp, float swing_ki, float swing_kd, float swing_starti);
-        void set_wall_constants(float wall_max_voltage, float wall_kp, float wall_ki, float wall_kd, float wall_starti);
         void set_turn_exit_conditions(float turn_settle_error, float turn_settle_time, float turn_timeout);
         void set_drive_exit_conditions(float drive_settle_error, float drive_settle_time, float drive_timeout);
         void set_swing_exit_conditions(float swing_settle_error, float swing_settle_time, float swing_timeout);
@@ -151,11 +139,6 @@ class Drive{
 
         void swing_to_angle(float angle, bool move_left, bool motion_chaining = false);
         
-        enum class WallSide{
-          LEFT,
-          RIGHT
-        };
-        void wall_distance(WallSide direction, float distance, float heading, float wall_dis_target, float _drive_min_voltage = 0);
     
         Odom odom;
         float get_ForwardTracker_position();

@@ -2,8 +2,10 @@
 
 Drive::Drive(DriveStyle drive_style, MotorGroup& left_motors, MotorGroup& right_motors, IMU& inertial, 
              float wheel_diameter, float motor_gear_ratio, float gyro_scale, 
-             Rotation& fwd_tracker, float fwd_tracker_diameter, float fwd_tracker_dist, 
-             Rotation& sideways_tracker, float sideways_tracker_diameter, float sideways_tracker_dist):
+             // Rotation& fwd_tracker, float fwd_tracker_diameter,
+             float fwd_tracker_dist, 
+             // Rotation& sideways_tracker, float sideways_tracker_diameter,
+             float sideways_tracker_dist):
     drive_style(drive_style),
     DriveL(left_motors), 
     DriveR(right_motors), 
@@ -14,15 +16,15 @@ Drive::Drive(DriveStyle drive_style, MotorGroup& left_motors, MotorGroup& right_
     gyro_scale(gyro_scale), 
     drive_in_to_deg_ratio(M_PI*wheel_diameter*wheel_ratio/360.0), // 360 is correct while 36000 isn't for some reason. 
 
-    Fwd_tracker(fwd_tracker), 
-    ForwardTracker_diameter(fwd_tracker_diameter), 
+    // Fwd_tracker(fwd_tracker), 
+    // ForwardTracker_diameter(fwd_tracker_diameter), 
     ForwardTracker_center_distance(fwd_tracker_dist), 
-    ForwardTracker_in_to_deg_ratio(M_PI*fwd_tracker_diameter/36000.0), // 36000 because using PROS API motor.get_position() returns centidegrees
+    // ForwardTracker_in_to_deg_ratio(M_PI*fwd_tracker_diameter/36000.0), // 36000 because using PROS API motor.get_position() returns centidegrees
 
-    Sideways_tracker(sideways_tracker), 
-    SidewaysTracker_diameter(sideways_tracker_diameter), 
+    // Sideways_tracker(sideways_tracker), 
+    // SidewaysTracker_diameter(sideways_tracker_diameter), 
     SidewaysTracker_center_distance(sideways_tracker_dist), 
-    SidewaysTracker_in_to_deg_ratio(M_PI*sideways_tracker_diameter/36000.0), // 36000 because using PROS API motor.get_position() returns centidegrees
+    // SidewaysTracker_in_to_deg_ratio(M_PI*sideways_tracker_diameter/36000.0), // 36000 because using PROS API motor.get_position() returns centidegrees
 
     master(CONTROLLER_MASTER)
 {
@@ -125,24 +127,6 @@ void Drive::set_swing_constants(float swing_max_voltage, float swing_kp, float s
   this->swing_ki = swing_ki;
   this->swing_kd = swing_kd;
   this->swing_starti = swing_starti;
-} 
-
-/**
- * Resets default turn constants.
- * Turning includes turn_to_angle() and turn_to_point().
- * 
- * @param wall_max_voltage Max voltage out of 127.
- * @param wall_kp Proportional constant.
- * @param wall_ki Integral constant.
- * @param wall_kd Derivative constant.
- * @param wall_starti Minimum distance in inches for integral to begin.
- */
-void Drive::set_wall_constants(float wall_max_voltage, float wall_kp, float wall_ki, float wall_kd, float wall_starti){
-  this->wall_max_voltage = wall_max_voltage;
-  this->wall_kp = wall_kp;
-  this->wall_ki = wall_ki;
-  this->wall_kd = wall_kd;
-  this->wall_starti = wall_starti;
 } 
 
 /**
@@ -391,13 +375,13 @@ void Drive::swing_to_angle(float angle, bool move_left, bool motion_chaining){
  */
 
 float Drive::get_ForwardTracker_position(){
-  if(drive_style == DriveStyle::ZERO_TRACKER || 
-     drive_style == DriveStyle::TANK_ONE_SIDEWAYS_ROTATION){
+  // if(drive_style == DriveStyle::ZERO_TRACKER || 
+     // drive_style == DriveStyle::TANK_ONE_SIDEWAYS_ROTATION){
     // return DriveR.get_position() * drive_in_to_deg_ratio;
     return get_right_position_in();
-  }
+  // }
   
-  return Fwd_tracker.get_position()*ForwardTracker_in_to_deg_ratio;
+  // return Fwd_tracker.get_position()*ForwardTracker_in_to_deg_ratio;
 }
 
 /**
@@ -407,61 +391,12 @@ float Drive::get_ForwardTracker_position(){
  */
 
 float Drive::get_SidewaysTracker_position(){
-  if(drive_style == DriveStyle::ZERO_TRACKER || 
-     drive_style == DriveStyle::TANK_ONE_FORWARD_ROTATION){
+  // if(drive_style == DriveStyle::ZERO_TRACKER || 
+     // drive_style == DriveStyle::TANK_ONE_FORWARD_ROTATION){
     return 0;
-  }
+  // }
   
-  return Sideways_tracker.get_position()*SidewaysTracker_in_to_deg_ratio;
-}
-
-void Drive::wall_distance(WallSide direction, float distance, float heading, float wall_dis_target, float _drive_min_voltage){
-  PID drivePID(distance, drive_kp, drive_ki, drive_kd, drive_starti, drive_settle_error, drive_settle_time, drive_timeout);
-  PID headingPID(reduce_negative_180_to_180(heading - get_absolute_heading()), heading_kp, heading_ki, heading_kd, heading_starti, turn_settle_error, turn_settle_time, turn_timeout);
-  PID wall_PID(wall_dis_target, wall_kp, wall_ki, wall_kd, wall_starti);
-  float start_average_position = (get_left_position_in()+get_right_position_in())/2.0;
-  float average_position = start_average_position;
-
-  drivePID.settle_time=10; //
-
-  int rev_constant=1;
-  if(distance<0) rev_constant =-1;
-  // Wait for heading to settle too, not just distance -- otherwise the move
-  // can end right as the wall correction is mid-swing, leaving the robot
-  // still turned away from the target heading.
-  while(!drivePID.is_settled() || !headingPID.is_settled()){
-    average_position = (get_left_position_in()+get_right_position_in())/2.0;
-    drive_error = distance+start_average_position-average_position;
-    float heading_error = reduce_negative_180_to_180(heading - get_absolute_heading());
-    float drive_output = drivePID.compute(drive_error);
-    float heading_output = headingPID.compute(heading_error);
-
-    float wall_distance_error = 0;
-    if(direction == WallSide::LEFT){
-      wall_distance_error = wall_dis_target - distance_sensorL.get();
-    } else {
-      wall_distance_error = wall_dis_target - distance_sensorR.get();
-    }
-
-    // if(fabs(wall_distance_error)>200) wall_distance_error=0;
-    float wall_dist_output = wall_PID.compute(wall_distance_error);
-
-    if(direction == WallSide::RIGHT){
-      wall_dist_output = -wall_dist_output;
-    }
-
-    drive_output = clamp(drive_output, -drive_max_voltage, drive_max_voltage);
-    heading_output = clamp(heading_output, -heading_max_voltage, heading_max_voltage);
-    wall_dist_output = clamp(wall_dist_output, -wall_max_voltage, wall_max_voltage);
-
-    clamp_min_voltage(drive_output, _drive_min_voltage);
-
-    drive_with_voltage(left_voltage_scaling(drive_output, heading_output+wall_dist_output*rev_constant), right_voltage_scaling(drive_output, heading_output+wall_dist_output*rev_constant));
-    // drive_with_voltage(drive_output+heading_output+wall_dist_output*rev_constant, drive_output-heading_output-wall_dist_output*rev_constant);
-    delay(10);
-  }
-  // drive_settle_time=150;
-  // drive_max_voltage=drive_min_voltage;
+  // return Sideways_tracker.get_position()*SidewaysTracker_in_to_deg_ratio;
 }
 
 /**
@@ -722,354 +657,42 @@ void Drive::turn_to_point(float X_position, float Y_position, float extra_angle_
 }
 
 
-
-// Cascade never allowed to extend past this (motor degrees, measured from the
-// one-time tare_position() in initialize(), see main.cpp). Small placeholder
-// -- tune once the real extend limit has been tested.
-const int CASCADE_EXTEND_LIMIT_DEG = 3800;
-
-// Preset button cascade targets. Change these values to retarget. Each one is
-// the previous target divided by 1.5, so the Y/X presets extend the cascade
-// less far than they used to (old values in the comments).
-// NOTE: back up from the 363 the /1.5 pass left it at. This is the height the
-// arm rotates up to POS_1 at, and 363 was not far enough out to clear the other
-// components -- the arm jammed on the way up and sat there until its wait timed
-// out. Keep this above CASCADE_ARM_TUCK_DEG.
-int CASCADE_PRESET_DEG = 545;       // Y -> ArmPosition::POS_1, first cascade move
-int CASCADE_PRESET_2_DEG = 397;     // X -> ArmPosition::POS_3, first cascade move (was 595)
-int CASCADE_RIGHT_FINAL_DEG = 147;  // Y -> cascade's 2nd move (down a bit), once the arm settles at POS_1 (was 220)
-int CASCADE_LEFT_FINAL_DEG = 0;     // X -> cascade's 2nd move, once the arm reaches POS_3 (fully retracted, unchanged by /1.5)
-// move_absolute() speed for the cascade moves in the Y and X preset sequences,
-// out of 200 rpm (green cartridge, so 200 is the ceiling). Only the
-// driver-facing presets use these; auton passes its own velocity to score()
-// (see auton-routines.cpp).
-const int CASCADE_PRESET_MOVE_VELOCITY = 107;
-// Used instead for Y's first move when that move is a descent -- i.e. Y pressed
-// with the cascade raised above CASCADE_PRESET_DEG, which at the normal speed
-// took too long to come down. Extending out from a low cascade still uses the
-// speed above.
-const int CASCADE_DESCEND_VELOCITY = 160;
-const int CASCADE_MANUAL_DOWN_SPEED = 67; // UP (d-pad) manual retract, out of 127
-
-// How long a preset sequence waits on one step before giving up and moving on.
-// The "arrived" tolerance itself is not defined here: these waits use the one
-// global CASCADE_SETTLE_ERROR (cascade.cpp), so tuning the cascade's settle in
-// one place changes teleop presets, auton and the PID together. This file used
-// to declare its own const CASCADE_SETTLE_ERROR_DEG = 20, which quietly shadowed
-// the global and made edits to it do nothing here.
-const int PRESET_STEP_TIMEOUT_MS = 3000;
-
-// A cascade raised past this has to bring the arm down to
-// ArmPosition::CASCADE_CLEAR (ARM_CASCADE_CLEAR_DEG, 260, see arm.cpp) before
-// it comes down, whatever the arm is doing -- see Y's arm_first split below.
-// This is now the ONLY trigger for that tuck. The arm's own angle used to
-// trigger it as well, so the 260-and-back move fired on a low cascade whenever
-// the arm was already high; only a cascade this far out needs it.
-// Deliberately above CASCADE_PRESET_DEG (545): it no longer means "the height
-// the arm can swing at" (CASCADE_PRESET_DEG is that, and Y still waits to reach
-// it before rotating to POS_1), only "high enough that coming down needs the
-// arm tucked".
-const int CASCADE_ARM_TUCK_DEG = 1000;
-// Its own, much longer bail-out than PRESET_STEP_TIMEOUT_MS: coming all the way
-// down from CASCADE_EXTEND_LIMIT_DEG (3800) to CASCADE_PRESET_DEG at
-// CASCADE_PRESET_MOVE_VELOCITY (107 rpm, ~642 deg/s) takes ~5.2s, so a 3s
-// timeout would give up and rotate the arm while the cascade was still high.
-const int CASCADE_CLEAR_TIMEOUT_MS = 9000;
-
-// Looser than ARM_SETTLE_ERROR, used only by the A-button claw-open wait
-// (arm_wait_settled_solo). If the arm is stuck/jammed short of CLAW_CLEAR or
-// DOWN, waiting on the tight global settle would hold the claw shut until
-// PRESET_STEP_TIMEOUT_MS expires. This lets it open as soon as the arm is
-// reasonably clear, even if it never fully settles. Still well under the
-// smallest gap between claw-sequence targets (DOWN=1 to DOWN_HOLD=15, 14 deg)
-// so it doesn't open before the arm has actually moved out of the way.
-const float ARM_CLAW_OPEN_SETTLE_ERROR_DEG = 10;
-
-// Looser settle bands used ONLY by X's y_engaged sequence
-// (start_y_engaged_sequence below), which chains four moves back to back and
-// pauses visibly at each handoff while the mechanism creeps the last few
-// degrees into the tight global band. These let each step hand off as soon as
-// the arm/cascade is close enough for the NEXT move to be safe, instead of
-// waiting for it to actually stop.
-//
-// They override the global settle for those waits only -- nothing else on the
-// robot (other presets, auton, the PIDs' own holding behaviour) gets looser.
-// Raise them until the sequence flows; the ceiling is how far off a step can
-// hand off before the following move collides with something. Live-tunable on
-// the dashboard ("x_seq/settle").
-float X_SEQ_ARM_SETTLE_ERROR = 15;      // arm degrees (global is 7)
-float X_SEQ_CASCADE_SETTLE_ERROR = 60;  // cascade degrees (global is 25)
-
-// True while a RIGHT/LEFT preset sequence owns the cascade. Cleared as soon as
-// the driver takes manual control with L1/L2, which also tells a running
-// sequence task to abort instead of fighting the driver. File scope (not local
-// to control_arcade) so those tasks can see it.
-static bool cascade_preset_active = false;
-
-// Bumped every time something new takes over the arm: another preset press, or
-// DOWN. A running sequence task holds the id it started with and gives up as
-// soon as it's been superseded, so a later button press can't be undone by an
-// older sequence still working through its steps.
-static int preset_sequence_id = 0;
-
-// A sequence keeps going only while it still owns the cascade (driver hasn't
-// grabbed L1/L2) and hasn't been superseded by a newer press.
-static bool preset_still_owns(int seq_id){
-  return cascade_preset_active && seq_id == preset_sequence_id;
-}
-
-// Wait for the cascade to reach target_deg. Returns false if the sequence was
-// cancelled, so the caller can stop early. timeout_ms only needs raising for a
-// wait that can span most of the cascade's travel -- see the Y sequence.
-//
-// settle_error > 0 replaces the global CASCADE_SETTLE_ERROR for this one wait;
-// 0 (the default) uses the global. Only X's y_engaged sequence passes one.
-static bool cascade_wait_settled(int seq_id, int target_deg, int timeout_ms = PRESET_STEP_TIMEOUT_MS,
-                                 float settle_error = 0){
-  float band = settle_error > 0 ? settle_error : CASCADE_SETTLE_ERROR;
-  int waited_ms = 0;
-  while(fabs(cascade1.get_position() - target_deg) > band){
-    if(!preset_still_owns(seq_id)) return false;
-    delay(10);
-    waited_ms += 10;
-    if(waited_ms > timeout_ms) break;
-  }
-  return preset_still_owns(seq_id);
-}
-
-// Send the cascade to CASCADE_PRESET_DEG, Y's first move. Coming DOWN to it
-// from a raised cascade runs at CASCADE_DESCEND_VELOCITY; extending out to it
-// from below stays at the normal preset speed.
-static void cascade_move_to_preset(){
-  int velocity = cascade1.get_position() > CASCADE_PRESET_DEG
-               ? CASCADE_DESCEND_VELOCITY
-               : CASCADE_PRESET_MOVE_VELOCITY;
-  cascade1.move_absolute(CASCADE_PRESET_DEG, velocity);
-  cascade2.move_absolute(CASCADE_PRESET_DEG, velocity);
-}
-
-// Wait for the arm to reach whatever target was last set with
-// arm_set_position(). Same cancellation contract as cascade_wait_settled().
-// No settling delay up front: arm_set_position() clears arm_settled itself, so
-// the flag can no longer read stale-true for the previous target (see arm.h).
-//
-// settle_error > 0 replaces the global band for this one wait, measuring the
-// angle here rather than reading arm_settled -- the flag is computed by
-// arm_task() against ARM_SETTLE_ERROR, so it can't answer for a different
-// tolerance. 0 (the default) keeps using arm_settled, which is what honours
-// ARM_SETTLE_TIME_MS. Only X's y_engaged sequence passes one.
-static bool arm_wait_settled(int seq_id, float settle_error = 0){
-  int waited_ms = 0;
-  while(settle_error > 0
-          ? fabs(arm_target_degrees(arm_target) - arm_get_position_deg()) > settle_error
-          : !arm_settled){
-    if(!preset_still_owns(seq_id)) return false;
-    delay(10);
-    waited_ms += 10;
-    if(waited_ms > PRESET_STEP_TIMEOUT_MS) break;
-  }
-  return preset_still_owns(seq_id);
-}
-
-// Same idea as arm_wait_settled(), for arm-only sequences (e.g. the A/claw
-// sequence below) that never touch the cascade -- so unlike preset_still_owns(),
-// this doesn't require cascade_preset_active to still be true, only that a
-// later button press hasn't superseded this sequence's id.
-//
-// Measures the error itself instead of reading tele_arm_error, which arm_task()
-// only refreshes every 10ms and is therefore stale for the old target right
-// after arm_set_position() -- that staleness is what the settling delay that
-// used to sit here was working around.
-static bool arm_wait_settled_solo(int seq_id){
-  int waited_ms = 0;
-  while(fabs(arm_target_degrees(arm_target) - arm_get_position_deg()) > ARM_CLAW_OPEN_SETTLE_ERROR_DEG){
-    if(seq_id != preset_sequence_id) return false;
-    delay(10);
-    waited_ms += 10;
-    if(waited_ms > PRESET_STEP_TIMEOUT_MS) break;
-  }
-  return seq_id == preset_sequence_id;
-}
-
-// Raised by a claw-open sequence task once the arm has cleared and the claw
-// should now open; consumed by control_arcade()'s main loop on its next tick.
-//
-// Behaviour is unchanged from writing bumper_bt_a directly: the claw only ever
-// physically moves on the main loop's claw.set_value(bumper_bt_a) call, so it
-// still opens on the same iteration it always did. What changes is ownership --
-// bumper_bt_a is now written by one task only. Before, the sequence task wrote
-// into control_arcade()'s stack while the driver's A handler wrote the same
-// variable, so an A press landing mid-sequence could be silently undone (or
-// undo the sequence) depending on which task won.
-static volatile bool claw_open_pending = false;
-
-// Rotates the arm to clear_pos, then requests the claw open once it gets there.
-// Used by A's claw-open handling below whenever the arm is resting somewhere
-// the claw would hit something if it opened immediately.
-static void start_claw_open_sequence(ArmPosition clear_pos){
-  int claw_seq_id = ++preset_sequence_id;
-  arm_set_position(clear_pos);
-  pros::Task([claw_seq_id]{
-    if(!arm_wait_settled_solo(claw_seq_id)) return;
-    claw_open_pending = true;
-  });
-}
-
 /**
  * Controls a chassis with left stick throttle and right stick turning.
  * Default deadband is 5.
  */
 
 void Drive::control_arcade(){
-  claw.set_value(true);
   double throttle = 0;
   double turn = 0;
-  // bumper_bt_a is the claw's requested state: true = OPEN, false = CLOSED.
-  // The loop writes it out as claw.set_value(!bumper_bt_a), since set_value(false)
-  // is what opens the solenoid. Every read/write of it below follows that
-  // convention -- half of them didn't after the polarity flip, which is what
-  // killed A's "rotate clear, then open" move.
-  bool bt_a=false , last_bt_a=false, bumper_bt_a=false;
-  bool bt_Right=false , last_bt_Right=false;
-  bool bt_y=false , last_bt_y=false;
-  bool bt_b=false , last_bt_b=false;
-  bool bt_x=false , last_bt_x=false;
-  bool bt_down=false , last_bt_down=false;
-  // Edge state for the cascade limit switch, so it only re-zeros the encoders
-  // the tick it arrives on the switch -- see the tare below. Starts false, so a
-  // cascade already resting on the switch at opcontrol start still gets one tare.
-  bool last_cascade_at_limit=false;
-  // The two pneumatics are no longer independent per-button toggles -- RIGHT
-  // and DOWN both write both of them, and a low arm suppresses op_toggle.
-  // op_toggle_state is a REQUEST, not the solenoid's state: it survives while
-  // the arm is low and only reaches the solenoid once the arm is above
-  // ARM_DOWN_HOLD_DEG. See the RIGHT/DOWN handling in the loop below.
-  // toggle_state starts TRUE so the driver's first RIGHT press flips it to
-  // false (and matches competition_initialize()'s toggle.set_value(true) in
-  // main.cpp, so opcontrol doesn't drop the solenoid the instant it starts).
-  // DOWN also puts it back true, so a press of RIGHT after either of those
-  // lands on false first, then alternates.
-  bool toggle_state=true, op_toggle_state=false;
-  bool y_engaged=false; // set by Y's press, consumed by X to pick which behavior it runs
-  cascade_preset_active = false;
-  // Task in_fxn(intake_status);
   chassis.drive_stop(MotorBrake::coast);
+  lift1.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+  lift2.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+  toggle.set_brake_mode(pros::E_MOTOR_BRAKE_BRAKE);
+  left_roller.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
+  right_roller.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
 
-  // HOLD so the cascade stops dead and stays there the instant .move(0) is
-  // called, in either direction -- previously only move_absolute() (used by
-  // the RIGHT/LEFT presets) actively held; letting go of L1/L2 during manual
-  // control just coasted, most noticeably as the cascade sagging back down
-  // under gravity after a retract.
-  cascade1.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-  cascade2.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+  bool claw_state = true;
+  claw.set_value(claw_state);
 
-  // The Y preset: open the claw, get the arm and the cascade to
-  // CASCADE_PRESET_DEG / POS_1 in whichever order clears the other (see the
-  // arm_high split below), then once the arm settles at POS_1 bring the cascade
-  // back down a bit to CASCADE_RIGHT_FINAL_DEG. Two callers below in the loop:
-  //   - Y itself.
-  //   - RIGHT's first press (the one that turns op_toggle on), which runs the
-  //     identical move, y_engaged included -- so X after either button behaves
-  //     the same.
-  auto start_y_sequence = [&]{
-    y_engaged = true;
-    cascade_preset_active = true;
-    int y_seq_id = ++preset_sequence_id;
-    claw.set_value(false);
-    bumper_bt_a = true; // true = open; keep the A toggle in sync, else claw.set_value(!bumper_bt_a) re-closes this next tick
-    // Which of the two moves first, decided by the CASCADE HEIGHT ALONE:
-    //   - Cascade raised past CASCADE_ARM_TUCK_DEG (1000): the arm comes down to
-    //     CASCADE_CLEAR first NO MATTER WHERE IT IS, and only then does the
-    //     cascade descend. A cascade that high has room for the arm to rotate
-    //     from anywhere, and the arm has to be out of the way before it comes
-    //     down through the other components.
-    //   - Otherwise: the CASCADE goes first, because the arm has no room to
-    //     rotate up until it's out at CASCADE_PRESET_DEG. Rotating the arm
-    //     first here is what left it stalling against the other components,
-    //     stuck down low until its wait timed out.
-    // The arm's own angle used to force the tuck too (|| arm >= 260), which is
-    // why the 260-and-back move also ran with the cascade down low.
-    bool arm_first = cascade1.get_position() > CASCADE_ARM_TUCK_DEG;
-    if(!arm_first){
-      cascade_move_to_preset(); // starts on the press; the arm waits on it below
-    }
-    // Runs on its own task so waiting for the cascade and the arm doesn't block
-    // the rest of control_arcade() (drive, intake, other buttons).
-    pros::Task([y_seq_id, arm_first]{
-      if(arm_first){
-        // Waits for the arm to physically reach CASCADE_CLEAR, not just for the
-        // target to be set, so the cascade never comes down while the arm is
-        // still up where it would foul.
-        arm_set_position(ArmPosition::CASCADE_CLEAR);
-        if(!arm_wait_settled(y_seq_id)) return;
-        cascade_move_to_preset();
-      }
-      // Either way, the arm only rotates up to POS_1 once the cascade has
-      // actually ARRIVED at CASCADE_PRESET_DEG. That height is what gives the
-      // arm room to swing up; starting before it gets there is what jammed the
-      // arm. Long timeout because this also covers the cascade coming a long
-      // way down to the preset from fully extended.
-      if(!cascade_wait_settled(y_seq_id, CASCADE_PRESET_DEG, CASCADE_CLEAR_TIMEOUT_MS)) return;
+  // Lift release damping state, see the L1/L2 block below. lift_holding starts
+  // true to match the HOLD brake mode set just above.
+  double lift_cmd = 0;
+  bool lift_holding = true;
+  const double lift_hold_ff = 12;  // tune: least output that stops the arm sagging
+  // L2 double-tap auto-retract state, see the L1/L2 block below.
+  uint32_t l2_last_press = 0;
+  uint32_t lift_auto_start = 0;
+  bool lift_auto_down = false;
+  const uint32_t lift_double_tap_ms = 400;
+  const uint32_t lift_auto_timeout_ms = 3000;
+  const double lift_bottom_deg = 5;
+  const double lift_slew = 8;      // per 10ms tick, so ~145ms from 115 down
 
-      arm_set_position(ArmPosition::POS_1);
-      if(!arm_wait_settled(y_seq_id)) return;
-      cascade1.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_PRESET_MOVE_VELOCITY);
-      cascade2.move_absolute(CASCADE_RIGHT_FINAL_DEG, CASCADE_PRESET_MOVE_VELOCITY);
-    });
-  };
-
-  // The four-step preset sequence: close the claw, extend the cascade, raise
-  // the arm to POS_3, retract the cascade, then settle the arm at POS_2.
-  // Called by X below, when y_engaged is set. Pulled out of the X handler so
-  // it reads as one named move; captures bumper_bt_a/y_engaged by reference so
-  // the claw toggle and the Y-engaged flag stay in sync exactly as the inline
-  // version did.
-  auto start_y_engaged_sequence = [&]{
-    claw.set_value(true);
-    bumper_bt_a = false; // false = closed; keep the A toggle in sync, else claw.set_value(!bumper_bt_a) would reopen it next tick
-    y_engaged = false;  // consumed
-    cascade_preset_active = true;
-    int x_seq_id = ++preset_sequence_id;
-    cascade1.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_PRESET_MOVE_VELOCITY);
-    cascade2.move_absolute(CASCADE_PRESET_2_DEG, CASCADE_PRESET_MOVE_VELOCITY);
-    // Run on its own task so the waits between steps don't block the rest
-    // of control_arcade() (drive, intake, other buttons). Each wait bails
-    // out if the driver takes the cascade back over with L1/L2, or presses
-    // another preset.
-    pros::Task([x_seq_id]{
-      // 1. cascade is already heading to CASCADE_PRESET_2_DEG; give it 100ms
-      //    to start moving, then 2. raise the arm to POS_3.
-      pros::delay(100);
-      if(!preset_still_owns(x_seq_id)) return;
-      // Both waits here use the looser X_SEQ_* bands instead of the global
-      // settle, so each step hands off as soon as the mechanism is close
-      // enough rather than after it has fully stopped -- see their definitions
-      // near the top of the file.
-      arm_set_position(ArmPosition::POS_3);
-      if(!arm_wait_settled(x_seq_id, X_SEQ_ARM_SETTLE_ERROR)) return;
-
-      // 3. retract the cascade all the way back to CASCADE_LEFT_FINAL_DEG.
-      cascade1.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_PRESET_MOVE_VELOCITY);
-      cascade2.move_absolute(CASCADE_LEFT_FINAL_DEG, CASCADE_PRESET_MOVE_VELOCITY);
-      if(!cascade_wait_settled(x_seq_id, CASCADE_LEFT_FINAL_DEG,
-                               PRESET_STEP_TIMEOUT_MS, X_SEQ_CASCADE_SETTLE_ERROR)) return;
-
-      // 4. rotate the arm down to POS_2, cascade holds where it is --
-      //    move_absolute() keeps it there, and cascade_preset_active stays
-      //    true so the main loop won't zero its voltage.
-      arm_set_position(ArmPosition::POS_2);
-    });
-  };
-
-  // NOTE: deliberately does NOT tare the cascade encoders. It used to, and
-  // that was the bug where the cascade "started at 0 while raised": autonomous
-  // usually ends with the cascade still up, then opcontrol began by calling
-  // tare_position() right here, which declared that raised height to be 0. The
-  // L2 retract guard below (get_position() <= 0) then refused to bring it down,
-  // and every preset target was off by however high auton had left it.
-  // Zeroing now happens once in initialize() (see main.cpp), so 0 always means
-  // the height the cascade was at when the program started, and cascade_limit
-  // re-zeros it below whenever the real bottom stop is actually hit.
+  // R1/R2 roller state. Intake latches on until R2 opens the claw; eject only
+  // lasts as long as R2 is held.
+  enum RollerPhase { roller_idle, roller_intake, roller_eject };
+  RollerPhase roller_phase = roller_idle;
 
   while(1){
   throttle = master.get_analog(ANALOG_LEFT_Y);
@@ -1101,239 +724,139 @@ void Drive::control_arcade(){
     chassis.DriveR.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
   }
   
-    // A: toggles the claw open/closed. If the arm is currently settled at
-    // POS_2 (~160 degrees, reached via X) and this press is about to OPEN
-    // the claw, the arm first rotates up to ARM_CLAW_CLEAR_DEG (180 degrees)
-    // to clear itself, and the claw only opens once the arm gets there --
-    // opening directly at 160 hits the arm. Closing, and opening from any
-    // other arm position, toggles immediately as before.
-    // A claw-clear sequence that finished waiting for the arm applies its
-    // open here, in the task that owns bumper_bt_a. Consumed before the A
-    // press below is evaluated, exactly where the sequence task's own write
-    // would have already landed.
-    if(claw_open_pending){
-      claw_open_pending = false;
-      bumper_bt_a = true;
+    // Lift: L1 raises until 150 deg, L2 lowers until 0 deg.
+    // Magnitude, not signed: the sensor counts the arm's travel away from the
+    // reset_position() zero in whichever direction it happens to be wired, and
+    // a negative reading here (reversed sensor, or PROS_ERR from an unplugged
+    // one) used to fail the arm_deg > 0 test and block L2 entirely.
+    double arm_deg = fabs(arm_rotation.get_position() / 100.0);
+    // Controller screen can only update every 50ms, so print every 10th loop.
+    static int print_count = 0;
+    if(++print_count >= 10){
+      master.print(0, 0, "arm: %.1f     ", arm_deg);
+      print_count = 0;
     }
-
-    bt_a = master.get_digital(DIGITAL_A);
-    if(!bt_a and last_bt_a){
-      bool opening = !bumper_bt_a; // bumper_bt_a true = OPEN (the loop writes claw.set_value(!bumper_bt_a), and set_value(false) is what opens); so currently false = closed = this press opens
-      if(opening && arm_settled && arm_target == ArmPosition::POS_2){
-        start_claw_open_sequence(ArmPosition::CLAW_CLEAR);
+    // Releasing L1/L2 used to call brake() straight from full speed, and
+    // E_MOTOR_BRAKE_HOLD latches its setpoint the instant it is called -- the
+    // 4-bar was still travelling past that point, so the hold PID hauled it
+    // back, overshot, and rang against the elastics. Instead the command slews
+    // down to a small upward feedforward and HOLD is latched only once the arm
+    // has actually stopped, so hold grabs a position it is already sitting at.
+    // The feedforward is what makes this safe on the way down: cutting to zero
+    // there would let gravity keep the arm accelerating, so it would never
+    // reach a standstill to latch a hold at and would just fall to the bottom.
+    // Double-tapping L2 runs the lift back down to 0 deg on its own. L1 aborts
+    // it, as does any further L2 press, and so does the timeout -- that last
+    // one is what stops an unplugged rotation sensor (arm_deg then reads off
+    // PROS_ERR and never falls under lift_bottom_deg) from driving the lift
+    // into its hard stop indefinitely.
+    if(master.get_digital_new_press(DIGITAL_L2)){
+      if(lift_auto_down){
+        lift_auto_down = false;
+        l2_last_press = 0;
       }
-      else if(opening && arm_settled && arm_target == ArmPosition::DOWN_HOLD){
-        // B stopped the arm here instead of going all the way down (see B
-        // below) -- finish the trip down to DOWN_HOLD_FINAL, then open.
-        start_claw_open_sequence(ArmPosition::DOWN_HOLD_FINAL);
+      else if(l2_last_press != 0 && millis() - l2_last_press <= lift_double_tap_ms){
+        lift_auto_down = true;
+        lift_auto_start = millis();
+        l2_last_press = 0;
       }
       else{
-        bumper_bt_a = !bumper_bt_a;
+        l2_last_press = millis();
       }
     }
-    last_bt_a = bt_a;
-    claw.set_value(!bumper_bt_a);
+    if(lift_auto_down && (master.get_digital(DIGITAL_L1) ||
+                          arm_deg <= lift_bottom_deg ||
+                          millis() - lift_auto_start >= lift_auto_timeout_ms)){
+      lift_auto_down = false;
+    }
 
-    // Gates op_toggle below.
-    bool arm_low = arm_get_position_deg() <= ARM_DOWN_HOLD_DEG;
+    double lift_target = lift_hold_ff;
+    if(master.get_digital(DIGITAL_L1) && arm_deg < 270){
+    lift_target = 127;
+    }
+    else if((master.get_digital(DIGITAL_L2) || lift_auto_down) && arm_deg > 0){
+      // A closed claw is carrying something, so bring it down gentler.
+      lift_target = claw_state ? -65 : -20;
+    }
 
-    // RIGHT (d-pad): flips `toggle`, and always requests op_toggle. Since
-    // `toggle` starts true and DOWN puts it back true, a press from there turns
-    // `toggle` OFF while op_toggle comes on; pressing it again brings `toggle`
-    // back on with op_toggle still on, and so on. Only B clears the op_toggle
-    // request.
-    //
-    // That first press also runs the whole Y preset -- claw open, cascade out,
-    // arm to POS_1 (287), cascade back down -- which is what gets the arm above
-    // ARM_DOWN_HOLD_DEG (28.5); op_toggle can't extend below that. The request
-    // stays latched through the move and reaches the solenoid on its own as the
-    // arm clears 28.5, early in the trip up, so no second press is needed.
-    // Later presses only flip `toggle`; the arm never affects `toggle` at all.
-    bt_Right = master.get_digital(DIGITAL_RIGHT);
-    if(!bt_Right and last_bt_Right){
-      bool first_press = !op_toggle_state; // "first" = op_toggle wasn't requested yet, i.e. since startup or the last B
-      toggle_state = !toggle_state;
-      op_toggle_state = true;
-      if(first_press){
-        start_y_sequence();
+    if(lift_cmd < lift_target){
+      lift_cmd = fmin(lift_cmd + lift_slew, lift_target);
+    }
+    else if(lift_cmd > lift_target){
+      lift_cmd = fmax(lift_cmd - lift_slew, lift_target);
+    }
+
+    // Red cartridge tops out near 100rpm, so 5 is genuinely stopped. Once the
+    // hold is latched it stays latched until L1/L2 is pressed again -- a nudge
+    // to the arm must not knock it back out of hold.
+    if(lift_target != lift_hold_ff){
+      if(lift_holding){
+        lift_holding = false;
+        lift1.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
+        lift2.set_brake_mode(pros::E_MOTOR_BRAKE_COAST);
       }
     }
-    last_bt_Right = bt_Right;
-
-
-    // DOWN (d-pad): forces `toggle` on. Not a toggle anymore -- pressing it
-    // repeatedly just re-asserts it. It no longer touches op_toggle; B owns
-    // clearing that now (see below).
-    bt_down = master.get_digital(DIGITAL_DOWN);
-    if(!bt_down and last_bt_down){
-      toggle_state = true;
+    else if(!lift_holding && lift_cmd == lift_hold_ff &&
+            fabs(lift1.get_actual_velocity()) < 5){
+      lift_holding = true;
+      lift1.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
+      lift2.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
     }
-    last_bt_down = bt_down;
 
-    // The arm gates op_toggle but doesn't clear the request behind it: at or
-    // below 28.5 the solenoid is held off no matter what RIGHT asked for, and
-    // it comes on by itself as soon as the arm is back above. `toggle` is
-    // driven straight from its own state, arm position irrelevant.
-    toggle.set_value(toggle_state);
-    op_toggle.set_value(op_toggle_state && !arm_low);
-
-    // Cascade limit switch: this one reads 1 when pressed, 0 when not pressed.
-    // Re-zero both cascade encoders on the RISING EDGE -- the tick it first
-    // arrives on the switch -- so the physical hard stop is always "0 degrees".
-    // That still corrects any encoder drift picked up over the match, and the
-    // L2 (retract) check below (cascade1.get_position() <= 0) still stops the
-    // motors right at the switch instead of relying on drifted encoder math.
-    //
-    // Deliberately NOT re-tared on every tick the switch is held, which is what
-    // it used to do. move_absolute()'s target is measured from the encoder
-    // zero, so re-zeroing under an in-flight move drags the target along with
-    // it: a preset issued with the cascade already resting on the switch (which
-    // is exactly where the X sequence parks it -- CASCADE_LEFT_FINAL_DEG is 0)
-    // crept up a few degrees and stalled, and only a second press -- by which
-    // point the cascade was off the switch and no longer taring -- ran the move
-    // properly. That was the "have to press Y twice" bug.
-    bool cascade_at_limit = cascade_limit.get_value() == 1;
-    if(cascade_at_limit and !last_cascade_at_limit){
-      cascade1.tare_position();
-      cascade2.tare_position();
+    if(lift_holding){
+      lift1.brake();
+      lift2.brake();
     }
-    last_cascade_at_limit = cascade_at_limit;
+    else{
+      lift1.move(lift_cmd);
+      lift2.move(lift_cmd);
+    }
 
-    //intake
+    // toggle: hold Right to spin at 75% (95/127), brake on release.
+    if(master.get_digital(DIGITAL_RIGHT)){
+      toggle.move(127);
+    }
+    else{
+      toggle.brake();
+    }
+
+    // rollers: R1 closes the claw and starts the intake, which runs at 127
+    // while R1 is held and drops to 20 once it is released. The intake stays
+    // alive at 20 until the claw opens again, which only R2 does. R2 opens the
+    // claw and ejects at 100 for exactly as long as it is held.
     if(master.get_digital(DIGITAL_R1)){
-      intake.move(127);
-    }
-    else if(master.get_digital(DIGITAL_R2)){
-      intake.move(-127);
-    }
-    else{
-      intake.move(0);
+      claw_state = false;
+      claw.set_value(claw_state);
+      roller_phase = roller_intake;
     }
 
-    // cascade (independent of intake, so R1/R2 no longer block L1/L2)
-    if (master.get_digital(DIGITAL_L1)){
-      cascade_preset_active = false;
-      if(cascade1.get_position() >= CASCADE_EXTEND_LIMIT_DEG || cascade2.get_position() >= CASCADE_EXTEND_LIMIT_DEG){
-        cascade1.move(0);
-        cascade2.move(0);
-      }
-      else{
-        cascade1.move(100);
-        cascade2.move(100);
-      }
+    if(master.get_digital(DIGITAL_R2)){
+      claw_state = true;
+      claw.set_value(claw_state);
+      roller_phase = roller_eject;
     }
-    else if(master.get_digital(DIGITAL_L2)){
-      cascade_preset_active = false;
-      if(cascade1.get_position() <= 0 || cascade2.get_position() <= 0){
-        cascade1.move(0);
-        cascade2.move(0);
-      }
-      else{
-        cascade1.move(-97);
-        cascade2.move(-97);
-      }
-    }
-    // UP (d-pad): manual retract, slower (67) than L2 for fine adjustment.
-    // Deliberately NOT bounded by the encoder like L1/L2 -- it keeps driving
-    // down past 0 (i.e. after drift has left the encoder reading negative at
-    // the real bottom), and the limit switch is the only thing that stops it.
-    // The tare above already re-zeroed both encoders on this same tick, so by
-    // the time the switch stops the motors here, 0 means the hard stop again.
-    // Letting go drops through to the else below, which stops the motors.
-    else if(master.get_digital(DIGITAL_UP)){
-      cascade_preset_active = false;
-      if(cascade_limit.get_value() == 1){
-        cascade1.move(0);
-        cascade2.move(0);
-      }
-      else{
-        cascade1.move(-CASCADE_MANUAL_DOWN_SPEED);
-        cascade2.move(-CASCADE_MANUAL_DOWN_SPEED);
-      }
-    }
-    else{
-      if(!cascade_preset_active){
-        cascade1.move(0);
-        cascade2.move(0);
-      }
+    else if(roller_phase == roller_eject){
+      roller_phase = roller_idle;
     }
 
-    // Y: claw open, arm and cascade to CASCADE_CLEAR / CASCADE_PRESET_DEG in
-    // whichever order clears the other, arm on to POS_1 once the cascade has
-    // arrived, then once the arm settles at POS_1, cascade moves down a bit to
-    // CASCADE_RIGHT_FINAL_DEG.
-    bt_y = master.get_digital(DIGITAL_Y);
-    if(bt_y and !last_bt_y){
-      // Y must never bring op_toggle on. Clearing the request here (rather than
-      // inside start_y_sequence, which RIGHT shares and whose latch has to
-      // survive) is what stops a request left over from RIGHT firing the
-      // solenoid the moment this sequence lifts the arm past ARM_DOWN_HOLD_DEG.
-      // Y also forces `toggle` ON, same as DOWN does, regardless of where
-      // RIGHT/DOWN left it. Written to the solenoids here as well as to the
-      // state, so the press lands on this tick instead of the next pass
-      // through the set_value() pair above.
-      op_toggle_state = false;
-      toggle_state = true;
-      toggle.set_value(true);
-      op_toggle.set_value(false);
-      start_y_sequence(); // defined above control_arcade's loop; RIGHT's first press runs it too
+    // Read the intake speed off the live button state rather than latching it
+    // at the moment of release, so a missed transition can't strand the
+    // rollers at the held speed.
+    switch(roller_phase){
+      case roller_intake: {
+        int roller_speed = master.get_digital(DIGITAL_R1) ? 127 : 20;
+        left_roller.move(roller_speed);
+        right_roller.move(roller_speed);
+        break;
+      }
+      case roller_eject:  left_roller.move(-100); right_roller.move(-100); break;
+      default:            left_roller.brake();    right_roller.brake();    break;
     }
-    last_bt_y = bt_y;
-
-    // B: arm to DOWN -- cascade untouched. Except if the arm is currently
-    // headed to or settled at POS_2 (~160 degrees, reached via X) with the
-    // claw closed: then it stops at DOWN_HOLD (~30 degrees) instead of going
-    // all the way down, so a held game piece doesn't get slammed into the
-    // ground while still gripped. See A above for how DOWN_HOLD gets the arm
-    // the rest of the way down (to DOWN_HOLD_FINAL, ~10 degrees) once the
-    // claw opens. Deliberately not gated on arm_settled -- X sets arm_target
-    // to POS_2 synchronously, so B pressed mid-transit (before the arm
-    // physically gets there) should still catch this case instead of
-    // falling through to DOWN.
-    bt_b = master.get_digital(DIGITAL_B);
-    if(bt_b and !last_bt_b){
-      // Cancels any preset sequence still stepping through its moves, so it
-      // can't send the arm back up after this.
-      ++preset_sequence_id;
-      y_engaged = false; // arm's leaving the Y-raised state, so X shouldn't run the full sequence next
-      // The arm is heading back down, so drop the op_toggle request with it --
-      // this is what re-arms RIGHT, whose next press counts as a "first press"
-      // and runs the Y sequence again. (Used to live on DOWN.)
-      op_toggle_state = false;
-      if(arm_target == ArmPosition::POS_2 && !bumper_bt_a){ // !bumper_bt_a = claw closed
-        arm_set_position(ArmPosition::DOWN_HOLD);
-      }
-      else{
-        arm_set_position(ArmPosition::DOWN);
-      }
-    }
-    last_bt_b = bt_b;
-
-    // X: replaces the old dedicated LEFT (d-pad) button. If Y was pressed
-    // since the last reset, run the full former-X sequence (extend cascade,
-    // raise arm to POS_3, retract cascade, settle arm at POS_2). Otherwise
-    // just do the former-LEFT move: arm to POS_2 only, cascade untouched.
-    bt_x = master.get_digital(DIGITAL_X);
-    if(bt_x and !last_bt_x){
-      if(y_engaged){
-        start_y_engaged_sequence(); // defined above control_arcade's loop
-      }
-      else{
-        // Cancels any preset sequence still stepping through its moves, so it
-        // can't send the arm back up after this.
-        ++preset_sequence_id;
-        arm_set_position(ArmPosition::POS_2);
-      }
-    }
-    last_bt_x = bt_x;
 
     // MUST stay here. Without it this loop never blocks, so the FreeRTOS idle
-    // task (priority 0, vs this task's 8) never gets scheduled -- and idle is
-    // what reclaims a finished task's TCB and 32KB stack. Every Y/X/A preset
-    // press below spawns a pros::Task, so without this delay each press leaks
-    // 32KB permanently and the brain eventually runs out of heap and freezes
-    // mid-match until it's restarted. It also keeps this loop from flooding
-    // the smart port bus with unthrottled reads and .move() writes.
+    // task (priority 0, vs this task's 8) never gets scheduled. It also keeps
+    // this loop from flooding the smart port bus with unthrottled reads and
+    // .move() writes.
     delay(10);
   }
 }
