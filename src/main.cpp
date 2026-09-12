@@ -44,11 +44,13 @@ void initialize() {
 	// --- vexdash: Device Map -- sensors section ---
 	vexdash::declare_device(arm_rotation.get_port(), vexdash::DeviceType::kRotation, "arm_rotation");
 
-	// Start vexdash over the ESP32 Smart Port bridge (port 11 @ 115200 baud).
+	// Start vexdash over the ESP32 Smart Port bridge (port 11 @ 921600 baud).
 	// The ESP32 relays telemetry to the dashboard over WiFi (ws://192.168.4.1).
 	// Port 11 is free — nothing in robot-config.cpp claims it.
 	// Smart Port path leaves stdout free (printf still works); HUD off by default.
-	vexdash::init_smartport(11, 115200);
+	// Baud MUST match the WiFi box firmware's Serial1.begin(921600, ...).
+	// Running 115200 here starves the link and the dashboard drops every ~5 s.
+	vexdash::init_smartport(11, 921600);
 
 	start_dashboard();
 }

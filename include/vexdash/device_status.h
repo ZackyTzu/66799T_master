@@ -17,8 +17,8 @@
 // passed in as plain floats -- this class has NO PROS dependency):
 //   DeviceStatus ds(transport);
 //   ds.begin();
-//   float m[3] = {41.5f, 3.2f, 850.0f};        // temp C, power W, current mA
-//   ds.add_entry(3, DeviceType::kMotor, m, 3);  // observed type = MOTOR
+//   float m[4] = {41.5f, 3.2f, 850.0f, 127.0f};  // temp C, power W, current mA, rpm (WS10-F)
+//   ds.add_entry(3, DeviceType::kMotor, m, 4);    // observed type = MOTOR
 //   ds.send();   // encodes+sends, splitting across frames if ever needed
 //
 // The value order per observed_type is the §5.13 contract; the caller (a PROS
@@ -28,10 +28,15 @@
 
 namespace vexdash {
 
-// Max entries stageable before send(). Covers all 21 smart ports (DEVICE_STATUS
-// never emits ADI ports, §5.13); sized statically (no allocation).
-// 中文：最多可暫存的 entry 數，足夠涵蓋 21 個 smart port。
-constexpr std::size_t kMaxDeviceStatusEntries = 21;
+// Max entries stageable before send(): 21 smart ports (DEVICE_STATUS never
+// emits ADI ports, §5.13) + 1 for the Brain battery, which occupies its own
+// entry at wire port 0 (§5.13, v1.3/WS10-D) and is NOT one of the 21. Sized 21
+// before, so a robot with all 21 smart ports populated silently lost whichever
+// entry was staged last once the battery had taken a slot. Sized statically
+// (no allocation).
+// 中文：最多可暫存的 entry 數＝21 個 smart port ＋ 1 格給 Brain 電池（電池走 wire
+// port 0，不佔智慧埠）。原本只給 21 格，21 埠全插滿的車會被電池擠掉最後一顆裝置。
+constexpr std::size_t kMaxDeviceStatusEntries = 22;
 
 class DeviceStatus {
  public:

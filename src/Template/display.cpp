@@ -103,7 +103,9 @@ void simple_screen_task(bool rainbow){
     // float avg_torque = (chassis.DriveL.get_torque(0) + chassis.DriveL.get_torque(1) + chassis.DriveL.get_torque(2) + chassis.DriveR.get_torque(0) + chassis.DriveR.get_torque(1) + chassis.DriveR.get_torque(2)) / 6.0;
     // printf("avg_torque: %.2f\n", avg_torque);
 
-    printf("roll: %.2f\n", chassis.Gyro.get_roll());
+    // Disabled: this printf ran every 50 ms and flooded the serial link,
+    // which starved the vexdash telemetry stream. Re-enable only for debugging.
+    // printf("roll: %.2f\n", chassis.Gyro.get_roll());
 
     delay(50);
     screen_time += 50;

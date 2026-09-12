@@ -91,7 +91,25 @@ struct PumpConfig {
   // mid-burst by a lossy bridge (e.g. ESP32 WiFi): without this, a dropped
   // def is lost for the rest of the session and the dashboard falls back to
   // a generic name (channel_N) for that item. Set to 0 to disable.
-  std::uint32_t registration_resend_period_ms = 2000;
+  // Was 2000ms; raised to 5000ms (2026-07-26, ticket V-15) -- the resend burst
+  // is ~843B sent all at once and was the single biggest periodic spike on the
+  // RS-485/WiFi link every 2s. 5s is still short enough to self-heal a dropped
+  // CHANNEL_DEF well within a normal debugging/pairing session, so the
+  // self-heal guarantee holds while cutting the burst frequency by 2.5x.
+  // 中文：原本 2000ms，V-15 精算後改 5000ms——重送整批約 843B 是線路上唯一的
+  // 週期性壓力尖峰，每 2 秒炸一次；拉到 5 秒仍能在合理時間內自癒掉幀的
+  // CHANNEL_DEF（沿用 tick() 第 6 點的自癒機制），但把突發頻率降到 2.5 分之一。
+  //
+  // COUPLED WITH THE DASHBOARD: dashboard/src/state/focusStore.ts mirrors this
+  // value as ROBOT_REGISTRATION_RESEND_PERIOD_MS and sizes its "focus group has
+  // really gone away" grace window at 2x it. A dropped CONFIG_SCHEMA makes a
+  // focus group vanish for up to one resend period; if that grace window were
+  // shorter than this period, a single dropped frame would wipe the user's
+  // tuning-focus selection. Change this value -> change that one too.
+  // 中文：**與前端耦合**——dashboard/src/state/focusStore.ts 以 2 倍此週期當作
+  // 「焦點分組真的不存在」的寬限窗（掉一則 CONFIG_SCHEMA 會讓分組消失最長一個週期，
+  // 寬限窗若短於週期，單一掉幀就會把使用者選的調校焦點清掉）。改這裡要同步改那裡。
+  std::uint32_t registration_resend_period_ms = 5000;
 
   // 方案 A（watch 自動上報）鉤子。非 nullptr 時，pump 在每次 telemetry flush 前
   // 先呼叫它一次，讓 watch 登記表把所有登記變數取樣進 telemetry()。預設 nullptr
@@ -102,7 +120,8 @@ struct PumpConfig {
 
   // 熱插拔掃描鉤子（DEVICE_MAP 自動化）。非 nullptr 時，pump 每 device_scan_period_ms
   // 呼叫它一次；該回呼負責掃埠並「只在內容變更時」重送 DEVICE_MAP。DEVICE_MAP 不佔
-  // watch 遙測槽（§5.12），與 64 槽上限無關。獨立於 pre_flush 之外用「慢週期」是因為
+  // watch 遙測槽（§5.12），與 96 槽上限（F2-f，2026-08-21 前是 64）無關。獨立於
+  // pre_flush 之外用「慢週期」是因為
   // 掃 21 個埠不需要跟著 50Hz 遙測跑；插拔本來就是低頻事件。預設 nullptr＝維持舊行為
   // （不掃、不自動送），既有呼叫者完全不受影響，host 可測。
   DeviceScanCallback device_scan = nullptr;
