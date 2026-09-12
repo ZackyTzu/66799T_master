@@ -89,7 +89,12 @@ void autonomous() {
 }
 
 void opcontrol() {
-	default_constants();
+	// ⚠ 這裡**不可以**再叫 default_constants()（2026-09-13 拿掉）。
+	// 它會把 robot-config.cpp 裡硬寫的那組 PID 蓋回去，也就是說在 dashboard
+	// 上調好的每一個值，只要比賽切換一次模式（disabled -> driver）或程式重跑，
+	// 就全部被還原成舊值——教練會看到「明明調過了，車子跑起來還是原來那樣」。
+	// 常數現在只在 initialize() 載入一次（本檔第 8 行），之後就只有 dashboard
+	// 會動它。定案的數字還是要自己抄回 src/robot-config.cpp。
 	tune_start();   // 保險：initialize() 已經叫過，這裡再叫一次也只會起一次
 
 	// 兩種模式，由 Brain 螢幕 POSITION 分頁右上角那顆 TUNE 鈕切換：

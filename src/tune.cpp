@@ -38,6 +38,11 @@ const int kJobSwingR = 5;  // 右 swing（JAR 也是 5）
 // 一次測試動作最多跑多久。時間到自動停——這是「車子一定停得下來」的最後一道保險。
 const std::uint32_t kMaxRunMs = 10000;
 
+// 按下測試鈕之後、真的開跑之前要等多久。
+// 這一段是為了讓起跑條件跟 auton 一樣「從靜止開始」，理由寫在 tune_job_task()
+// 裡真正用到它的地方。brake 模式下這台車放掉搖桿約 100ms 內就停住，150 有餘裕。
+const std::uint32_t kSettleBeforeRunMs = 150;
+
 // 下面這些會被三個執行緒同時碰（vexdash 背景緒、tune_job_task、opcontrol），
 // 所以要 volatile：叫編譯器每次老實去記憶體讀，不要把值留在暫存器。
 volatile int           g_job          = kJobNone;
@@ -260,7 +265,19 @@ void tune_job_task() {
         g_job = kJobNone;
       } else {
         float value = g_job_value;
-        chassis.drive_stop(MotorBrake::brake);  // 先把上一個搖桿指令清掉
+
+        // ---- 起跑條件要跟 auton 一模一樣：從「真的靜止」開始 ----------------
+        // 2026-09-13 教練實測：「在 dashboard 調 drive 時底盤的速度變化，跟沒用
+        // dashboard 跑底盤明顯不一樣」。原因之一就在這裡：原本 drive_stop() 的
+        // 下一行就直接開跑，可是搖桿在上一個 10ms tick 才剛餵過馬達
+        // （tune_drive_loop()），車子還在滑。drive_distance() 一進函式就把
+        // start_average_position 與 get_absolute_heading() 當成整段的基準
+        // （src/Template/drive.cpp 的 306 / 291 行），基準抓到的是「移動中」的
+        // 值 —— 距離會短一截、heading PID 一開始就有假誤差，整條加減速曲線就跟
+        // auton 從靜止起跑的那條對不起來。
+        // 修法：煞停之後等它真的停下來，再讓 drive_distance() 去量基準。
+        chassis.drive_stop(MotorBrake::brake);
+        pros::delay(kSettleBeforeRunMs);
 
         if (job == kJobLift) {
           // 手臂測試：底盤整段不動（上面已經 brake 住），只有 lift1/lift2 在跑。
@@ -269,10 +286,17 @@ void tune_job_task() {
           lift_pid.move_to(value);
           lift_pid.stop();
         }
-        else if (job == kJobDrive)  chassis.drive_distance(value);
-        else if (job == kJobTurn)   chassis.turn_to_angle(value);
-        else if (job == kJobSwing)  chassis.swing_to_angle(value, true);
-        else if (job == kJobSwingR) chassis.swing_to_angle(value, false);
+        // ⚠ 一律走「跟 auton 完全同一個函式、同一個 overload」。
+        //   auton 寫的是帶 heading 的 drive_distance(距離, 方位, motion_chaining)，
+        //   所以這裡也用它，heading = 車現在的方位（上面已經停穩才量）。
+        //   單參數的 drive_distance(value) 最後也是轉呼叫這一個
+        //   （src/Template/drive.cpp:290-292），寫成明的是為了以後有人動了單參數
+        //   版時，調參跟 auton 不會悄悄分岔成兩條路。
+        //   turn / swing 同理，motion_chaining 一律明寫 false（＝auton 的預設）。
+        else if (job == kJobDrive)  chassis.drive_distance(value, chassis.get_absolute_heading(), false);
+        else if (job == kJobTurn)   chassis.turn_to_angle(value, false);
+        else if (job == kJobSwing)  chassis.swing_to_angle(value, true,  false);
+        else if (job == kJobSwingR) chassis.swing_to_angle(value, false, false);
 
         chassis.drive_stop(MotorBrake::brake);
         g_stop_request = false;
@@ -406,8 +430,15 @@ void tune_register_dashboard() {
 
 void tune_start() {
   // function-local static：呼叫幾次都只會真的起一次。
-  static pros::Task job_runner(tune_job_task);
-  static pros::Task ctl_runner(tune_ctl_task);
+  // ⚠ 優先權與堆疊一律用 PROS 預設（TASK_PRIORITY_DEFAULT / TASK_STACK_DEPTH_DEFAULT）
+  //   ——opcontrol()、autonomous() 這兩個主執行緒用的就是同一組預設值。
+  //   把 job_runner 調高會讓它插隊、調低會被搖桿迴圈壓住，兩種都會讓測試動作的
+  //   迴圈週期跟 auton 對不起來（週期為什麼要緊，見 src/Template/drive.cpp 的
+  //   drive_distance()）。要動之前先讀那段註解。
+  static pros::Task job_runner(tune_job_task, TASK_PRIORITY_DEFAULT,
+                               TASK_STACK_DEPTH_DEFAULT, "tune_job");
+  static pros::Task ctl_runner(tune_ctl_task, TASK_PRIORITY_DEFAULT,
+                               TASK_STACK_DEPTH_DEFAULT, "tune_ctl");
 }
 
 bool tune_mode_enabled() { return g_ctl_mode; }
@@ -463,18 +494,30 @@ void tune_drive_loop() {
     // 正在跑測試動作時不要碰底盤與手臂，不然這個迴圈每 10ms 就把測試的輸出
     // 蓋掉一次——手臂那兩行尤其致命：LiftPID::move_to() 才剛 move() 完，
     // 這裡馬上 brake()，PID 會變成「輸出永遠是 0」，手臂一動也不動。
-    if (!tune_is_running()) {
-      double throttle = ctl.get_analog(ANALOG_LEFT_Y);
-      double turn     = ctl.get_analog(ANALOG_RIGHT_X);
-      if (std::fabs(throttle) < 5) throttle = 0;
-      if (std::fabs(turn) < 5)     turn = 0;
-      chassis.DriveL.move(throttle + turn);
-      chassis.DriveR.move(throttle - turn);
-
-      lift1.brake();
-      lift2.brake();
+    if (tune_is_running()) {
+      // 2026-09-13：測試動作在跑的時候，這個迴圈**一顆馬達都不要碰**。
+      // 原本 toggle / 兩顆 roller 的 brake() 在 if 外面，所以就算測試正在跑也
+      // 照樣每 10ms 送三筆指令出去；那三筆跟 drive_distance() 的 PID 迴圈
+      // （兩組編碼器 + IMU 讀取、兩組馬達寫入）在同一條 smart port 上排隊，
+      // 把 PID 的一輪拖長。PID::compute() 的 kD／積分／settle 計時全都是
+      // 「一輪算一次、而且假設一輪剛好 10ms」（src/Template/PID.cpp:101/106/111），
+      // 輪子被拖長，同一組 kP/kD 打出來的加減速就跟 auton 不一樣——教練說的
+      // 「速度變化明顯不同」，這是第二個原因（第一個是起跑點，見 tune_job_task）。
+      // 機構在上一輪 idle 時就已經 brake 住了（brake mode 是持續生效的狀態，
+      // 不是每輪都要重下的指令），少送這幾筆不會讓它們鬆掉。
+      pros::delay(10);
+      continue;
     }
 
+    double throttle = ctl.get_analog(ANALOG_LEFT_Y);
+    double turn     = ctl.get_analog(ANALOG_RIGHT_X);
+    if (std::fabs(throttle) < 5) throttle = 0;
+    if (std::fabs(turn) < 5)     turn = 0;
+    chassis.DriveL.move(throttle + turn);
+    chassis.DriveR.move(throttle - turn);
+
+    lift1.brake();
+    lift2.brake();
     toggle.brake();
     left_roller.brake();
     right_roller.brake();
