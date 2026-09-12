@@ -11,8 +11,9 @@
  *      名字與分組**逐字照抄 JAR**，所以網頁上的分組長得跟範例車一樣。
  *   2. Brain 螢幕 POSITION 分頁右上角一顆 TUNE 鈕：按一下進調參模式、再按一下退出。
  *      進了之後控制器那幾顆鍵就是「跑一次測試動作」的按鈕（配置表在 tune.cpp）。
- *   3. 電腦 dashboard 上四顆按鈕：Run drive test / Run turn test / Run swing test /
- *      Run STOP，對到 chassis.drive_distance() / turn_to_angle() / swing_to_angle()。
+ *   3. 電腦 dashboard 上五顆按鈕：Run drive test / Run turn test / Run swing test /
+ *      Run lift test / Run STOP，對到 chassis.drive_distance() / turn_to_angle() /
+ *      swing_to_angle() / lift_pid.move_to()（include/lift_pid.h）。
  *
  * ⚠ 調參模式**預設關著**，關著的時候整台車跟沒有這個檔案時一模一樣
  *   （opcontrol 走原本的 chassis.control_arcade()，機構邏輯一個字都沒動）。
@@ -45,8 +46,10 @@ bool tune_task_started();
 
 // ---- 調參模式專用的開車迴圈 ----------------------------------------------
 // opcontrol 在調參模式下走這個，而不是 chassis.control_arcade()。
-// 差別只有一個：機構（lift / toggle / roller）全程 brake 不吃按鍵，
+// 差別只有一個：機構（lift / toggle / roller）不吃搖桿按鍵，
 // 因為那幾顆鍵在調參模式下已經是測試按鈕了（按 L1 不該同時抬手臂又跑測試）。
+// 手臂是唯一的例外：方向鍵會叫 lift_pid 跑位置 PID 測試，那段期間這個迴圈
+// 不會去 brake 手臂（否則 PID 的輸出每 10ms 就被蓋掉一次，手臂不會動）。
 // 搖桿照樣可以開車——兩次測試之間本來就要把車開回起點。
 // 這個函式會一直跑到調參模式關掉才返回。
 void tune_drive_loop();
@@ -58,5 +61,8 @@ struct TuneCtlValues {
   float drive_inch;   // L1 前進 / L2 後退 一次走幾吋
   float swing_deg;    // R1 往左 / R2 往右 一次 swing 幾度（相對現在方位）
   float turn_deg[4];  // X / Y / A / B 各轉到哪個絕對方位
+  // 方向鍵四顆各把手臂送到哪個角度，照機構真實高低排（[0] 下鍵最低 ~ [3] 上鍵最高）。
+  // 單位＝控制器螢幕上那個 "arm: xxx"，見 include/lift_pid.h 的口徑說明。
+  float lift_deg[4];
 };
 TuneCtlValues tune_ctl_values();

@@ -1,5 +1,6 @@
 #include "main.h"
 #include "tune.h"
+#include "lift_pid.h"
 #include "vexdash_pros/vexdash_pros.h"
 
 #include <cmath>
@@ -11,8 +12,10 @@
 /*  原版：D:\VEX v5\AI專案\DPLIB\jar-template\src\JAR-Template\tune.cpp       */
 /*  這一份刻意跟原版長得很像（同樣的 job 編號、同樣的 10 秒上限、同樣的參數   */
 /*  名字與分組），差異只有三處，每一處下面都寫了理由：                        */
-/*    1. 這台車沒有 D4B / 機構位置 PID（沒有 Mech 類別），所以 JAR 的 d4b      */
-/*       四組參數與「Run D4B test」按鈕整組略過。                             */
+/*    1. JAR 的機構叫 D4B、這台車的機構是 lift（手臂），所以 JAR 的 d4b 四組   */
+/*       參數與「Run D4B test」按鈕改名成 lift（見 include/lift_pid.h）。      */
+/*       2026-09-13 補：原本這裡寫「這台車沒有機構位置 PID 所以整組略過」，    */
+/*       教練要調 lift 的 PID，所以照 JAR 的 Mech 移植了一份過來。            */
 /*    2. *_max_voltage 的範圍是 0~127 不是 0~12：這台車的 Drive 輸出走的是     */
 /*       pros::Motor::move()（-127~127），default_constants() 填的就是         */
 /*       127 / 64 / 107。照 JAR 夾成 12 會直接把底盤廢掉。                     */
@@ -29,7 +32,8 @@ const int kJobNone   = 0;
 const int kJobDrive  = 1;
 const int kJobTurn   = 2;
 const int kJobSwing  = 3;  // 左 swing
-const int kJobSwingR = 5;  // 右 swing（JAR 也是 5，中間的 4 是它的 D4B）
+const int kJobLift   = 4;  // 手臂位置 PID（JAR 的 4 就是它的 D4B，編號刻意對齊）
+const int kJobSwingR = 5;  // 右 swing（JAR 也是 5）
 
 // 一次測試動作最多跑多久。時間到自動停——這是「車子一定停得下來」的最後一道保險。
 const std::uint32_t kMaxRunMs = 10000;
@@ -48,6 +52,17 @@ volatile bool          g_ctl_mode     = false;
 float g_ctl_drive_inch = 24;                      // L1 前進 / L2 後退 幾吋
 float g_ctl_swing_deg  = 90;                      // R1 左 / R2 右 swing 幾度（相對）
 float g_turn_deg[4]    = { 0, 45, 90, 180 };      // X / Y / A / B 的絕對方位
+
+// 手臂的四個高度（方向鍵四顆各一個），照機構真實高低排：
+//   [3] 上鍵 = 最高    [2] 右鍵    [1] 左鍵    [0] 下鍵 = 最低
+// 電腦上的名字是 lift_deg_1 ~ lift_deg_4，數字由低到高（1 最低、4 最高）。
+// 單位＝控制器螢幕上那個 "arm: xxx"（見 include/lift_pid.h 的口徑說明）。
+//
+// 2026-09-13：預設 0 / 90 / 180 / 270 是照 lift_top_deg（270）四等分猜的，
+//   **不是**量過的實際高度。上車之後用手把手臂擺到你要的位置、看控制器螢幕
+//   的 arm: 數字抄下來，再回電腦上把這四格改掉。
+//   真正的上下限還會被 lift_pid.min_position / max_position 夾一次（雙保險）。
+float g_lift_deg[4]    = { 0, 90, 180, 270 };     // 下, 左, 右, 上
 
 /**
  * 一個可以在電腦上拉滑桿調整的常數。
@@ -121,20 +136,72 @@ TuneParam kParams[] = {
     {"turn_deg_3", "controller", &g_turn_deg[2], -180, 360},
     {"turn_deg_4", "controller", &g_turn_deg[3], -180, 360},
 
-    // ---- lift：教練調的開迴路手臂控制（Drive::control_arcade()，src/Template/drive.cpp）----
-    // 常數本體現在是 chassis 的成員（include/Template/drive.h），這裡只是照抄
-    // 上面幾組的寫法拿位址註冊；預設值＝原本寫死在 control_arcade() 裡的值。
-    {"lift_hold_ff",        "lift", &chassis.lift_hold_ff,        0,  60},
-    {"lift_slew",           "lift", &chassis.lift_slew,           1,  60},
-    {"lift_up_volt",        "lift", &chassis.lift_up_volt,        0, 127},
-    {"lift_down_volt",      "lift", &chassis.lift_down_volt,   -127,   0},
-    {"lift_down_volt_claw", "lift", &chassis.lift_down_volt_claw, -127, 0},
-    {"lift_top_deg",        "lift", &chassis.lift_top_deg,        0, 360},
-    {"lift_bottom_deg",     "lift", &chassis.lift_bottom_deg,     0,  60},
+    // 手臂四個高度（1 最低 ~ 4 最高），方向鍵四顆各一個。夾限給 -10~360 是
+    // 為了留一點餘裕讓人試，真正會不會跑到那裡由 lift 安全那組決定：
+    // LiftPID::move_to() 會再用 lift_min_pos / lift_max_pos 夾一次。
+    {"lift_deg_1", "controller", &g_lift_deg[0], -10, 360},
+    {"lift_deg_2", "controller", &g_lift_deg[1], -10, 360},
+    {"lift_deg_3", "controller", &g_lift_deg[2], -10, 360},
+    {"lift_deg_4", "controller", &g_lift_deg[3], -10, 360},
+
+    // ---- lift 手動：教練原本在調的開迴路手臂控制 ----
+    // （Drive::control_arcade()，src/Template/drive.cpp；平常駕駛走的就是這組）
+    // 常數本體是 chassis 的成員（include/Template/drive.h），這裡只是照抄上面
+    // 幾組的寫法拿位址註冊；預設值＝原本寫死在 control_arcade() 裡的值。
+    //
+    // ⚠ 2026-09-13 分組名從 "lift" 改成 "lift 手動"：下面新增的位置 PID 那組
+    //   照 JAR 的規矩就是叫 "lift"，兩組同名會在網頁上混成一堆分不出誰是誰。
+    //   **參數名字一個都沒改**，所以抄回 robot-config.cpp 的對照關係不變。
+    {"lift_hold_ff",        "lift 手動", &chassis.lift_hold_ff,        0,  60},
+    {"lift_slew",           "lift 手動", &chassis.lift_slew,           1,  60},
+    {"lift_up_volt",        "lift 手動", &chassis.lift_up_volt,        0, 127},
+    {"lift_down_volt",      "lift 手動", &chassis.lift_down_volt,   -127,   0},
+    {"lift_down_volt_claw", "lift 手動", &chassis.lift_down_volt_claw, -127, 0},
+    {"lift_top_deg",        "lift 手動", &chassis.lift_top_deg,        0, 360},
+    {"lift_bottom_deg",     "lift 手動", &chassis.lift_bottom_deg,     0,  60},
     // 原本是 uint32_t，watch_config 不支援 uint32_t*（見
     // include/vexdash_pros/watch_registry.h 的 add_config 多載），已在
     // include/Template/drive.h 把型別改成 float，這裡直接註冊同一個成員。
-    {"lift_double_tap_ms",  "lift", &chassis.lift_double_tap_ms, 100, 2000},
+    {"lift_double_tap_ms",  "lift 手動", &chassis.lift_double_tap_ms, 100, 2000},
+
+    // ---- lift：手臂的位置 PID（JAR 的 d4b 那四組，字首改 lift）----
+    // 本體在 include/lift_pid.h / src/lift_pid.cpp。只在 tune 模式生效，
+    // 平常駕駛的 L1/L2 走的還是上面那組 "lift 手動"，一個字都沒動。
+    //
+    // 誤差單位是「手臂度數」（全行程約 0~270），不是 JAR 的馬達編碼器度數
+    // （動輒好幾千），所以 kp 是個位數而不是 0.05 那種小數。
+    // ⚠ lift_max_voltage 的範圍是 0~127 不是 JAR 的 0~12：這台車的輸出走
+    //   pros::Motor::move()，理由同檔頭差異 2。
+    {"lift_kp",          "lift", &lift_pid.kp,          0,  20},
+    {"lift_ki",          "lift", &lift_pid.ki,          0,   2},
+    {"lift_kd",          "lift", &lift_pid.kd,          0,  50},
+    {"lift_starti",      "lift", &lift_pid.starti,      0,  90},
+    {"lift_max_voltage", "lift", &lift_pid.max_voltage, 0, 127},
+
+    // ---- 抗重力前饋：輸出 = kg * cos(手臂跟水平差幾度) ----
+    // lift_kg 預設 12 ＝ 現行的 lift_hold_ff（已知「手放開不會掉」的最小輸出）。
+    // lift_deg_per_motor_deg 是 0 的話角度永遠算成 0、cos(0)=1，整條退化成
+    // 「固定給 lift_kg」——就是現在開迴路在做的事，也是建議的起點。
+    // 感測器直接裝在手臂軸上的話這一格填 1，才會依角度變化（要實車量）。
+    {"lift_kg",                "lift 抗重力", &lift_pid.kg,                0,  60},
+    {"lift_horizontal_deg",    "lift 抗重力", &lift_pid.horizontal_deg, -360, 360},
+    {"lift_deg_per_motor_deg", "lift 抗重力", &lift_pid.deg_per_motor_deg, 0,   2},
+
+    // ---- 進階：什麼時候算「到了」、最多跑多久 ----
+    // lift_timeout 下限一樣是 500ms（0 = 永不逾時，手臂會停不下來）。
+    // lift_hold_ms 是到位之後再撐住幾毫秒——這一段就是你在曲線上看「會不會掉」
+    // 的地方，也是調 lift_kg 的依據。
+    {"lift_settle_error", "lift 進階", &lift_pid.settle_error,   0,   30},
+    {"lift_settle_time",  "lift 進階", &lift_pid.settle_time,    0, 2000},
+    {"lift_timeout",      "lift 進階", &lift_pid.timeout,      500, 8000},
+    {"lift_hold_ms",      "lift 進階", &lift_pid.hold_ms,        0, 3000},
+
+    // ---- 安全：只准跑到這兩個角度之間 ----
+    // 打錯一個 0（想打 27 打成 270）不會讓手臂去撞機械死點硬卡住。
+    // 上限預設由 lift_pid_sync_limits() 對齊 lift_top_deg（見 src/lift_pid.cpp）；
+    // 那個值要在真車上量過才准往上調。
+    {"lift_min_pos",     "lift 安全", &lift_pid.min_position, -10, 360},
+    {"lift_max_pos",     "lift 安全", &lift_pid.max_position, -10, 360},
 };
 const int kParamCount = sizeof(kParams) / sizeof(kParams[0]);
 
@@ -170,6 +237,10 @@ void on_run_swing(void*) {
   // swing 的角度是**相對現在的方位**，跟 turn 不一樣（JAR 的 R1 也是這樣算）。
   begin_job(kJobSwing, chassis.get_absolute_heading() - g_ctl_swing_deg);
 }
+// 手臂跑到 lift_deg_1（"controller" 那組的第一格，＝方向鍵下鍵那個位置）。
+// JAR 的「Run D4B test」是按鈕帶參數的，PROS 版的 declare_command() 只支援
+// 零參數觸發鈕（檔頭差異 3），所以目標值一樣是從 "controller" 那組讀當下值。
+void on_run_lift(void*) { begin_job(kJobLift, g_lift_deg[0]); }
 void on_stop(void*) { g_stop_request = true; }
 
 /**
@@ -191,7 +262,14 @@ void tune_job_task() {
         float value = g_job_value;
         chassis.drive_stop(MotorBrake::brake);  // 先把上一個搖桿指令清掉
 
-        if (job == kJobDrive)       chassis.drive_distance(value);
+        if (job == kJobLift) {
+          // 手臂測試：底盤整段不動（上面已經 brake 住），只有 lift1/lift2 在跑。
+          // move_to() 會卡到到位／逾時／STOP／10 秒上限才回來——卡在這個背景
+          // 小任務裡是對的，dashboard 的 callback 與控制器任務都不會被拖住。
+          lift_pid.move_to(value);
+          lift_pid.stop();
+        }
+        else if (job == kJobDrive)  chassis.drive_distance(value);
         else if (job == kJobTurn)   chassis.turn_to_angle(value);
         else if (job == kJobSwing)  chassis.swing_to_angle(value, true);
         else if (job == kJobSwingR) chassis.swing_to_angle(value, false);
@@ -213,7 +291,16 @@ void tune_job_task() {
 /*    R1  往左 swing ctl_swing_deg    R2  往右 swing ctl_swing_deg            */
 /*    X   轉到 turn_deg_1（預設 0）   Y   轉到 turn_deg_2（預設 45）           */
 /*    A   轉到 turn_deg_3（預設 90）  B   轉到 turn_deg_4（預設 180）          */
-/*  方向鍵：JAR 那四顆是 D4B 的四個高度，這台車沒有機構位置 PID，所以空著。   */
+/*                                                                           */
+/*  方向鍵四顆 = 手臂的四個高度，照機構真實高低排（逐字照 JAR 的 D4B）：       */
+/*    方向鍵上  手臂到 lift_deg_4（最高，預設 270）                            */
+/*    方向鍵右  手臂到 lift_deg_3（預設 180）                                  */
+/*    方向鍵左  手臂到 lift_deg_2（預設 90）                                   */
+/*    方向鍵下  手臂到 lift_deg_1（最低，預設 0）                              */
+/*  往上的鍵＝手臂往上，學生不用背。四個值自己量了在電腦上填。                */
+/*  ⚠ 方向鍵右在平常駕駛是 toggle（control_arcade()），這裡不衝突：            */
+/*    這個任務只在 g_ctl_mode 開著時才派工，而那時候跑的是 tune_drive_loop()， */
+/*    control_arcade() 已經 break 掉了。                                       */
 /*                                                                           */
 /*  ⚠ 控制器上沒有 STOP 鍵（跟 JAR 一樣）。要停車有三條路：                   */
 /*    1. 電腦 dashboard 上的 "Run STOP"                                       */
@@ -231,6 +318,7 @@ void tune_ctl_task() {
   // Drive::control_arcade() 也在用（L2 雙擊），兩邊會互相吃掉對方的邊緣。
   bool p_l1 = false, p_l2 = false, p_r1 = false, p_r2 = false;
   bool p_x = false, p_y = false, p_a = false, p_b = false;
+  bool p_up = false, p_dn = false, p_lf = false, p_rt = false;
 
   while (true) {
     // ⚠ 不管在不在測試模式，每一圈都要照樣讀、照樣更新 p_*。
@@ -243,6 +331,10 @@ void tune_ctl_task() {
     bool by = ctl.get_digital(DIGITAL_Y);
     bool ba = ctl.get_digital(DIGITAL_A);
     bool bb = ctl.get_digital(DIGITAL_B);
+    bool up = ctl.get_digital(DIGITAL_UP);
+    bool dn = ctl.get_digital(DIGITAL_DOWN);
+    bool lf = ctl.get_digital(DIGITAL_LEFT);
+    bool rt = ctl.get_digital(DIGITAL_RIGHT);
 
     bool hit_l1 = l1 && !p_l1;
     bool hit_l2 = l2 && !p_l2;
@@ -252,9 +344,14 @@ void tune_ctl_task() {
     bool hit_y  = by && !p_y;
     bool hit_a  = ba && !p_a;
     bool hit_b  = bb && !p_b;
+    bool hit_up = up && !p_up;
+    bool hit_dn = dn && !p_dn;
+    bool hit_lf = lf && !p_lf;
+    bool hit_rt = rt && !p_rt;
 
     p_l1 = l1; p_l2 = l2; p_r1 = r1; p_r2 = r2;
     p_x  = bx; p_y  = by; p_a  = ba; p_b  = bb;
+    p_up = up; p_dn = dn; p_lf = lf; p_rt = rt;
 
     // 接上正式場地控制器就自動關掉：比賽中誤觸測試動作是災難。
     // 練習用的 Competition Switch 不算（is_field_control 只認正式場控）。
@@ -271,6 +368,11 @@ void tune_ctl_task() {
       else if (hit_y)  begin_job(kJobTurn,    g_turn_deg[1]);
       else if (hit_a)  begin_job(kJobTurn,    g_turn_deg[2]);
       else if (hit_b)  begin_job(kJobTurn,    g_turn_deg[3]);
+      // ---- 手臂：四個高度，照方向鍵的高低排 ----
+      else if (hit_up) begin_job(kJobLift,    g_lift_deg[3]);   // 最高
+      else if (hit_rt) begin_job(kJobLift,    g_lift_deg[2]);
+      else if (hit_lf) begin_job(kJobLift,    g_lift_deg[1]);
+      else if (hit_dn) begin_job(kJobLift,    g_lift_deg[0]);   // 最低
     }
 
     pros::delay(20);
@@ -288,11 +390,18 @@ void tune_register_dashboard() {
     vexdash::watch_config(kParams[i].name, kParams[i].value, kParams[i].group);
   }
   // 按鈕名字逐字照 JAR（src/JAR-Template/tune.cpp 的 register_all）。
-  // JAR 的「Run D4B test」略過：這台車沒有機構位置 PID。
+  // JAR 的「Run D4B test」在這台車叫「Run lift test」（機構名字不一樣）。
   vexdash::declare_command("Run drive test", on_run_drive);
   vexdash::declare_command("Run turn test",  on_run_turn);
   vexdash::declare_command("Run swing test", on_run_swing);
+  vexdash::declare_command("Run lift test",  on_run_lift);
   vexdash::declare_command("Run STOP",       on_stop);
+
+  // 手臂安全夾限的上限對齊開迴路那組的 lift_top_deg。要在這裡叫（initialize()
+  // 執行期）而不是寫成建構式初值：chassis 是另一個編譯單元的全域物件，
+  // 全域初始化順序沒有保證。這一行也讓網頁上的 lift_max_pos 滑桿一開始就
+  // 停在正確的位置，而不是標頭檔裡那個硬寫的 270。
+  lift_pid_sync_limits();
 }
 
 void tune_start() {
@@ -340,7 +449,8 @@ bool tune_is_running() {
 void tune_drive_loop() {
   pros::Controller ctl(pros::E_CONTROLLER_MASTER);
 
-  // 機構全程 hold 住不動：那幾顆鍵在調參模式下已經是測試按鈕了。
+  // 機構不吃搖桿按鍵：那幾顆鍵在調參模式下已經是測試按鈕了。
+  // 手臂是唯一的例外——方向鍵會叫它跑位置 PID 測試，那段期間不可以 brake。
   lift1.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
   lift2.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
   toggle.set_brake_mode(pros::E_MOTOR_BRAKE_BRAKE);
@@ -350,7 +460,9 @@ void tune_drive_loop() {
   chassis.drive_stop(MotorBrake::brake);
 
   while (tune_mode_enabled()) {
-    // 正在跑測試動作時不要碰底盤，不然搖桿每 10ms 就把測試的輸出蓋掉一次。
+    // 正在跑測試動作時不要碰底盤與手臂，不然這個迴圈每 10ms 就把測試的輸出
+    // 蓋掉一次——手臂那兩行尤其致命：LiftPID::move_to() 才剛 move() 完，
+    // 這裡馬上 brake()，PID 會變成「輸出永遠是 0」，手臂一動也不動。
     if (!tune_is_running()) {
       double throttle = ctl.get_analog(ANALOG_LEFT_Y);
       double turn     = ctl.get_analog(ANALOG_RIGHT_X);
@@ -358,10 +470,11 @@ void tune_drive_loop() {
       if (std::fabs(turn) < 5)     turn = 0;
       chassis.DriveL.move(throttle + turn);
       chassis.DriveR.move(throttle - turn);
+
+      lift1.brake();
+      lift2.brake();
     }
 
-    lift1.brake();
-    lift2.brake();
     toggle.brake();
     left_roller.brake();
     right_roller.brake();
@@ -377,5 +490,6 @@ TuneCtlValues tune_ctl_values() {
   v.drive_inch = g_ctl_drive_inch;
   v.swing_deg  = g_ctl_swing_deg;
   for (int i = 0; i < 4; i++) v.turn_deg[i] = g_turn_deg[i];
+  for (int i = 0; i < 4; i++) v.lift_deg[i] = g_lift_deg[i];
   return v;
 }
