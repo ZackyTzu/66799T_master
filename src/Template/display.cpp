@@ -1,4 +1,5 @@
 #include "main.h"
+#include "tune.h"
 #include <cstring>
 #include <cstdio>
 #include <cmath>
@@ -433,15 +434,53 @@ void dashboard_draw_motors_tab(){
   screen::print(TEXT_MEDIUM, IMU_BTN_X0 + 8, IMU_BTN_Y0 + 4, "%s", btn_text);
 }
 
+// TUNE toggle geometry (top-right of the POSITION tab), shared between drawing
+// and touch hit-testing. Same placement semantics as the JAR template's CTRL
+// TEST button (jar-template src/JAR-Template/screen.cpp: top-right corner of
+// the debug page, because that is the page you already stare at while tuning).
+// It sits between the tab bar (ends at y=26) and the text block (starts at
+// y=55), so it is never painted over by the live readouts below it.
+const int TUNE_BTN_X0 = 330;
+const int TUNE_BTN_X1 = 470;
+const int TUNE_BTN_Y0 = 30;
+const int TUNE_BTN_Y1 = 52;
+
+// Orange/accent when ON, plain outline when OFF -- same visual grammar as the
+// auton selector boxes, so "filled = active" reads the same everywhere.
+void dashboard_draw_tune_button(){
+  bool on = tune_mode_enabled();
+  const char* label = on ? "TUNE ON" : "TUNE OFF";
+
+  screen::set_pen(COLOR_BG);
+  screen::set_eraser(COLOR_BG);
+  screen::fill_rect(TUNE_BTN_X0 - 2, TUNE_BTN_Y0 - 2, TUNE_BTN_X1 + 2, TUNE_BTN_Y1 + 2);
+
+  if(on){
+    screen::set_pen(COLOR_ACCENT);
+    screen::set_eraser(COLOR_ACCENT);
+    draw_rounded_rect_filled(TUNE_BTN_X0, TUNE_BTN_Y0, TUNE_BTN_X1, TUNE_BTN_Y1, 8);
+    screen::set_pen(pros::c::COLOR_WHITE);
+  } else {
+    screen::set_pen(COLOR_BORDER);
+    screen::set_eraser(COLOR_BG);
+    draw_rounded_rect_outline(TUNE_BTN_X0, TUNE_BTN_Y0, TUNE_BTN_X1, TUNE_BTN_Y1, 8);
+    screen::set_pen(COLOR_TEXT);
+  }
+  int label_x = dashboard_center_x(TEXT_MEDIUM, TUNE_BTN_X0, TUNE_BTN_X1, label);
+  screen::print(TEXT_MEDIUM, label_x, TUNE_BTN_Y0 + 3, "%s", label);
+  screen::set_eraser(COLOR_BG);
+}
+
 void dashboard_draw_position_tab(){
-  char buf[48];
+  char buf[64];
 
   // Clear the whole text block before redrawing (one generous rect, so a
   // taller-than-expected line can't get clipped and vanish) so stale
   // characters from a previous (longer) value can't linger either.
+  // Bottom moved 200 -> 236 to cover the TUNE key map drawn below.
   screen::set_pen(COLOR_BG);
   screen::set_eraser(COLOR_BG);
-  screen::fill_rect(15, 55, 465, 200);
+  screen::fill_rect(15, 55, 465, 236);
   screen::set_pen(COLOR_TEXT);
   screen::set_eraser(COLOR_BG);
 
@@ -453,6 +492,27 @@ void dashboard_draw_position_tab(){
 
   snprintf(buf, sizeof(buf), "Pitch: %.2f   Roll: %.2f", chassis.Gyro.get_pitch(), chassis.Gyro.get_roll());
   screen::print(TEXT_MEDIUM, 20, 170, "%s", buf);
+
+  dashboard_draw_tune_button();
+
+  // Key map, drawn only while TUNE is on -- students should not have to memorise
+  // the buttons, and the distances/angles come straight from the dashboard
+  // sliders so the printed numbers can never drift from what will actually run.
+  if(tune_mode_enabled()){
+    TuneCtlValues v = tune_ctl_values();
+    screen::set_pen(COLOR_TEXT);
+    snprintf(buf, sizeof(buf), "L1/L2 drive %.0f in   R1/R2 swing %.0f deg", v.drive_inch, v.swing_deg);
+    screen::print(TEXT_SMALL, 20, 196, "%s", buf);
+    snprintf(buf, sizeof(buf), "X/Y/A/B turn to %.0f / %.0f / %.0f / %.0f deg",
+             v.turn_deg[0], v.turn_deg[1], v.turn_deg[2], v.turn_deg[3]);
+    screen::print(TEXT_SMALL, 20, 212, "%s", buf);
+    if(tune_task_started()){
+      screen::print(TEXT_SMALL, 20, 228, "Dashboard: Run drive/turn/swing test, Run STOP");
+    } else {
+      // The background task never came up, so nothing will react to any button.
+      screen::print(TEXT_SMALL, 20, 228, "TUNE TASK NOT RUNNING -- buttons do nothing");
+    }
+  }
 }
 
 void dashboard_draw_auton_tab(bool clear_first){
@@ -568,6 +628,18 @@ void dashboard_handle_touch(){
       if(inertial.is_installed() && !inertial.is_calibrating()){
         inertial.reset(false); // non-blocking: status flips to "calibrating" and the tab reflects it live
       }
+    }
+    return;
+  }
+
+  if(current_tab == DisplayTab::POSITION){
+    // TUNE toggle: one tap enters tune mode (controller buttons become PID test
+    // buttons, see src/tune.cpp), another tap leaves it and gives the driver
+    // back the normal control_arcade(). Turning it off also fires a STOP so a
+    // test move that is still running does not outlive the mode.
+    if(touch.x >= TUNE_BTN_X0 && touch.x <= TUNE_BTN_X1 &&
+       touch.y >= TUNE_BTN_Y0 && touch.y <= TUNE_BTN_Y1){
+      tune_mode_set(!tune_mode_enabled());
     }
     return;
   }

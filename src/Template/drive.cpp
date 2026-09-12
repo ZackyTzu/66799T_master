@@ -1,4 +1,5 @@
 #include "main.h"
+#include "tune.h"   // 調參模式的三個鉤子（tune_stop_requested / tune_mode_enabled）
 
 Drive::Drive(DriveStyle drive_style, MotorGroup& left_motors, MotorGroup& right_motors, IMU& inertial, 
              float wheel_diameter, float motor_gear_ratio, float gyro_scale, 
@@ -243,6 +244,9 @@ void Drive::turn_to_angle(float angle, float extra_angle_deg, float extra_drive_
   tele_turn_target = angle; // vexdash telemetry
   PID turnPID(reduce_negative_180_to_180(angle - get_absolute_heading()), turn_kp, turn_ki, turn_kd, turn_starti, turn_settle_error, turn_settle_time, turn_timeout);
   while( !turnPID.is_settled() ){
+    // 調參模式下按了 dashboard 的 Run STOP（或動作跑超過 10 秒）就馬上停。
+    // 沒有測試動作在跑的時候永遠回 false，所以自動程式完全不受影響。
+    if(tune_stop_requested()){ break; }
     float error = reduce_negative_180_to_180(angle - get_absolute_heading());
     tele_turn_error = error; // vexdash telemetry
 
@@ -302,6 +306,7 @@ void Drive::drive_distance(float distance, float heading, bool motion_chaining, 
   float start_average_position = (get_left_position_in()+get_right_position_in())/2.0;
   float average_position = start_average_position;
   while(drivePID.is_settled() == false){
+    if(tune_stop_requested()){ break; }   // 見 turn_to_angle() 上面那條的說明
     average_position = (get_left_position_in()+get_right_position_in())/2.0;
     drive_error = distance+start_average_position-average_position;
     if(motion_chaining && fabs(drive_error) < motion_chain_drive_early_exit_range){
@@ -344,6 +349,7 @@ void Drive::drive_distance(float distance, float heading, bool motion_chaining, 
 void Drive::swing_to_angle(float angle, bool move_left, bool motion_chaining){
   PID swingPID(reduce_negative_180_to_180(angle - get_absolute_heading()), swing_kp, swing_ki, swing_kd, swing_starti, swing_settle_error, swing_settle_time, swing_timeout);
   while(swingPID.is_settled() == false){
+    if(tune_stop_requested()){ break; }   // 見 turn_to_angle() 上面那條的說明
     float error = reduce_negative_180_to_180(angle - get_absolute_heading());
     if(motion_chaining && fabs(error) < motion_chain_turn_early_exit_range){
       break;
@@ -696,6 +702,11 @@ void Drive::control_arcade(){
   RollerPhase roller_phase = roller_idle;
 
   while(1){
+  // Brain 螢幕的 TUNE 鈕按下去 -> 交棒給 tune_drive_loop()（src/tune.cpp）。
+  // 那邊的迴圈只開底盤、機構全程 hold，因為 L1/L2/R1/R2/X/Y/A/B 在調參模式下
+  // 已經是「跑一次 PID 測試」的按鈕了，留在這裡會變成按 L1 同時抬手臂又開車。
+  // TUNE 關著（預設）時這一行永遠是 false，底下的行為一個字都沒變。
+  if(tune_mode_enabled()){ break; }
   throttle = master.get_analog(ANALOG_LEFT_Y);
   turn = master.get_analog(ANALOG_RIGHT_X);
   
