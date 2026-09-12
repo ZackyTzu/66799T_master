@@ -89,6 +89,22 @@ class Drive{
 
         float drive_error = 0;
 
+        // --- lift tuning (control_arcade() 的開迴路手動控制，見 src/Template/drive.cpp) ---
+        // 原本是 control_arcade() 裡的區域變數/常數，抽成 Drive 成員只是為了讓
+        // src/tune.cpp 能拿位址註冊到 dashboard 的 "lift" 分組；行為與預設值不變。
+        float lift_hold_ff = 12;          // tune: 撐住手臂不下垂的最小輸出
+        float lift_slew = 8;              // 每 10ms tick 的變化上限，~145ms 從 115 降到 0
+        float lift_up_volt = 127;         // L1 上升電壓
+        float lift_down_volt = -20;       // L2 下降電壓（爪子開）
+        float lift_down_volt_claw = -65;  // L2 下降電壓（爪子夾著東西，下降更輕）
+        float lift_top_deg = 270;         // L1 上升角度上限
+        float lift_bottom_deg = 5;        // 判定「已經到底」的角度
+        float lift_double_tap_ms = 400;   // L2 雙擊視窗；原本是 uint32_t，但 PROS 版
+                                           // watch_config 不支援 uint32_t*（見
+                                           // include/vexdash_pros/watch_registry.h），
+                                           // 改成 float 才能上 dashboard，預設值與比較
+                                           // 邏輯不變（millis() 差值會自動轉成 double 比較）
+
         // --- vexdash live PID telemetry (auto-streamed to the web dashboard) ---
         float tele_drive_target = 0;   // drive_distance target (in)
         float tele_drive_output = 0;   // drive PID output (volts)

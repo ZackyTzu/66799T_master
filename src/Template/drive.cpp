@@ -686,15 +686,15 @@ void Drive::control_arcade(){
   // true to match the HOLD brake mode set just above.
   double lift_cmd = 0;
   bool lift_holding = true;
-  const double lift_hold_ff = 12;  // tune: least output that stops the arm sagging
+  // lift_hold_ff / lift_slew / lift_up_volt / lift_down_volt / lift_down_volt_claw /
+  // lift_top_deg / lift_bottom_deg / lift_double_tap_ms used to be local consts here;
+  // they now live as Drive members (include/Template/drive.h) so src/tune.cpp can
+  // register them under the dashboard's "lift" group. Default values unchanged.
   // L2 double-tap auto-retract state, see the L1/L2 block below.
   uint32_t l2_last_press = 0;
   uint32_t lift_auto_start = 0;
   bool lift_auto_down = false;
-  const uint32_t lift_double_tap_ms = 400;
   const uint32_t lift_auto_timeout_ms = 3000;
-  const double lift_bottom_deg = 5;
-  const double lift_slew = 8;      // per 10ms tick, so ~145ms from 115 down
 
   // R1/R2 roller state. Intake latches on until R2 opens the claw; eject only
   // lasts as long as R2 is held.
@@ -783,12 +783,12 @@ void Drive::control_arcade(){
     }
 
     double lift_target = lift_hold_ff;
-    if(master.get_digital(DIGITAL_L1) && arm_deg < 270){
-    lift_target = 127;
+    if(master.get_digital(DIGITAL_L1) && arm_deg < lift_top_deg){
+    lift_target = lift_up_volt;
     }
     else if((master.get_digital(DIGITAL_L2) || lift_auto_down) && arm_deg > 0){
       // A closed claw is carrying something, so bring it down gentler.
-      lift_target = claw_state ? -65 : -20;
+      lift_target = claw_state ? lift_down_volt_claw : lift_down_volt;
     }
 
     if(lift_cmd < lift_target){

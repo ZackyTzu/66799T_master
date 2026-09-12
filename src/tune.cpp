@@ -120,6 +120,21 @@ TuneParam kParams[] = {
     {"turn_deg_2", "controller", &g_turn_deg[1], -180, 360},
     {"turn_deg_3", "controller", &g_turn_deg[2], -180, 360},
     {"turn_deg_4", "controller", &g_turn_deg[3], -180, 360},
+
+    // ---- lift：教練調的開迴路手臂控制（Drive::control_arcade()，src/Template/drive.cpp）----
+    // 常數本體現在是 chassis 的成員（include/Template/drive.h），這裡只是照抄
+    // 上面幾組的寫法拿位址註冊；預設值＝原本寫死在 control_arcade() 裡的值。
+    {"lift_hold_ff",        "lift", &chassis.lift_hold_ff,        0,  60},
+    {"lift_slew",           "lift", &chassis.lift_slew,           1,  60},
+    {"lift_up_volt",        "lift", &chassis.lift_up_volt,        0, 127},
+    {"lift_down_volt",      "lift", &chassis.lift_down_volt,   -127,   0},
+    {"lift_down_volt_claw", "lift", &chassis.lift_down_volt_claw, -127, 0},
+    {"lift_top_deg",        "lift", &chassis.lift_top_deg,        0, 360},
+    {"lift_bottom_deg",     "lift", &chassis.lift_bottom_deg,     0,  60},
+    // 原本是 uint32_t，watch_config 不支援 uint32_t*（見
+    // include/vexdash_pros/watch_registry.h 的 add_config 多載），已在
+    // include/Template/drive.h 把型別改成 float，這裡直接註冊同一個成員。
+    {"lift_double_tap_ms",  "lift", &chassis.lift_double_tap_ms, 100, 2000},
 };
 const int kParamCount = sizeof(kParams) / sizeof(kParams[0]);
 
