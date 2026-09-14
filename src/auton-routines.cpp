@@ -39,7 +39,7 @@ int lift_l0_5(){
 void left(){
   default_constants();
   toggle.move(127);
-  delay(945);
+  delay(930);
   toggle.brake();
   Task lift_1(lift_l1);
   chassis.drive_distance(12);
@@ -54,13 +54,14 @@ void left(){
   delay(100);
   chassis.drive_max_voltage = 100;
   chassis.drive_distance(-7.5);
-  chassis.turn_to_angle(37.25);
+  chassis.turn_to_angle(37.5);
 
   default_constants();
+  Task lift_00(lift_l0);
   rollers.move(127);
   chassis.drive_max_voltage = 120;
   chassis.drive_distance(21.85);
-  chassis.drive_max_voltage = 40;
+  chassis.drive_max_voltage = 35;
   chassis.drive_distance(5.65);
   claw.set_value(false);
   chassis.drive_stop(MotorBrake::brake);
@@ -83,11 +84,11 @@ void left(){
   Task lift_0_3(lift_l0);
 
   default_constants();
-  chassis.turn_to_angle(123.5);
+  chassis.turn_to_angle(124);
   rollers.move(127);
-  chassis.drive_distance(22.75);
-  chassis.drive_max_voltage = 40;
-  chassis.drive_distance(5.5);
+  chassis.drive_distance(22.25);
+  chassis.drive_max_voltage = 35;
+  chassis.drive_distance(6);
   chassis.drive_max_voltage = 127;
   claw.set_value(false);
   chassis.drive_stop(MotorBrake::brake);
@@ -105,25 +106,34 @@ void left(){
   claw.set_value(true);
   delay(200);
   Task lift_0_4(lift_l0);
-  chassis.drive_distance(-8);
-
+  // chassis.drive_distance(-8,272.5,false);
+    chassis.drive_distance(-10);
   default_constants();
-  chassis.turn_to_angle(333.75);
-  chassis.drive_max_voltage = 127;
-  chassis.drive_distance(30);
-  rollers.move(127);
-  chassis.drive_max_voltage = 40;
-  chassis.drive_distance(8.5);
-  claw.set_value(false);
-  rollers.move(20);
-  delay(200);
-  Task lift_1_5(lift_l1);
-  chassis.drive_distance(16,0,false);
+  // chassis.drive_with_voltage(-60,-60);
+  // delay(2000);
+  // chassis.drive_max_voltage = 127;
+  // chassis.drive_distance(5);
+  // chassis.turn_to_angle(177.5);
+  // chassis.drive_distance(7);
   chassis.drive_stop(MotorBrake::brake);
-  lift1.set_brake_mode(MotorBrake::hold);
-  lift2.set_brake_mode(MotorBrake::hold);
-  lift1.brake();
-  lift2.brake();
+
+  // chassis.turn_to_angle(333);
+  // chassis.drive_max_voltage = 127;
+  // chassis.drive_distance(30);
+  // rollers.move(127);
+  // chassis.drive_max_voltage = 35;
+  // chassis.drive_distance(10);
+  // claw.set_value(false);
+  // rollers.move(20);
+  // delay(200);
+  // // Task lift_1_5(lift_l1);
+  // chassis.drive_max_voltage = 90;
+  // chassis.drive_distance(15,0,false);
+  // chassis.drive_stop(MotorBrake::brake);
+  // lift1.set_brake_mode(MotorBrake::hold);
+  // lift2.set_brake_mode(MotorBrake::hold);
+  // lift1.brake();
+  // lift2.brake();
 }
 
 void left2(){

@@ -24,6 +24,8 @@ Motor toggle(-16,MotorGears::green);
 Motor left_roller(-13,MotorGears::green);
 Motor right_roller(19,MotorGears::green);
 
+Motor intake(6,MotorGears::green);
+
 MotorGroup rollers({left_roller.get_port(), right_roller.get_port()});
 
 Rotation arm_rotation(-14);

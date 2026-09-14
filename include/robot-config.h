@@ -23,6 +23,8 @@ extern Motor lift2;
 
 extern Motor toggle;
 
+extern Motor intake;
+
 extern Motor left_roller;
 extern Motor right_roller;
 extern MotorGroup rollers;

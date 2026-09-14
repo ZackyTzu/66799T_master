@@ -777,7 +777,7 @@ void Drive::control_arcade(){
     }
     else if((master.get_digital(DIGITAL_L2) || lift_auto_down) && arm_deg > 0){
       // A closed claw is carrying something, so bring it down gentler.
-      lift_target = claw_state ? -65 : -20;
+      lift_target = claw_state ? -65 : -30;
     }
 
     if(lift_cmd < lift_target){
@@ -852,6 +852,17 @@ void Drive::control_arcade(){
       }
       case roller_eject:  left_roller.move(-100); right_roller.move(-100); break;
       default:            left_roller.brake();    right_roller.brake();    break;
+    }
+
+    // intake: hold Left to intake, hold Down to reverse, brake on release.
+    if(master.get_digital(DIGITAL_A)){
+      intake.move(127);
+    }
+    else if(master.get_digital(DIGITAL_B)){
+      intake.move(-127);
+    }
+    else{
+      intake.brake();
     }
 
     // MUST stay here. Without it this loop never blocks, so the FreeRTOS idle
